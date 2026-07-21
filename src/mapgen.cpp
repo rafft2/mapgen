@@ -14,13 +14,12 @@ enum biome_type_id : u16
 {
     BIOME_TYPE_NULL = 0,
     BIOME_TYPE_OCEAN,
+    BIOME_TYPE_MOUNTAIN,
+    BIOME_TYPE_PLAIN,
+    BIOME_TYPE_DESERT,
+    BIOME_TYPE_JUNGLE,
 
     BIOME_TYPE_COUNT,
-};
-
-struct tile_data
-{
-    biome_type_id biome_id;
 };
 
 struct color_rgb
@@ -37,21 +36,72 @@ color_rgb ColorRGB(u8 r, u8 g, u8 b)
     return(result);
 }
 color_rgb COLOR_BLACK = ColorRGB(0, 0, 0);
+color_rgb COLOR_WHITE = ColorRGB(255, 255, 255);
+color_rgb COLOR_GREEN = ColorRGB(0, 255, 0);
+color_rgb COLOR_MUSTARD_GREEN = ColorRGB(110, 110, 48);
 color_rgb COLOR_BLUE = ColorRGB(0, 0, 255);
+color_rgb COLOR_YELLOW = ColorRGB(255, 255, 0);
+color_rgb biome_color_table[BIOME_TYPE_COUNT] = { COLOR_BLACK, COLOR_BLUE, COLOR_WHITE, COLOR_GREEN, COLOR_YELLOW, COLOR_MUSTARD_GREEN }; 
+
+struct tile_data
+{
+    f32 elevation;
+    f32 moisture;
+};
+
+
+#include "stdlib.h"
+#include "time.h"
+f32 RandomFloat(f32 min, f32 max)
+{
+    f32 result = (f32)rand() / (f32)RAND_MAX;
+    result = min + result * (max - min);
+    return(result);
+}
+
+biome_type_id EvaluateBiome(f32 elevation, f32 moisture, f32 temperature)
+{
+    if(elevation < 0.2f)
+    {
+        return(BIOME_TYPE_OCEAN);
+    }
+    if(elevation > 0.8f)
+    {
+        return(BIOME_TYPE_MOUNTAIN);
+    }
+    
+    if(temperature > 0.6f && moisture < 0.4f)
+    {
+        return(BIOME_TYPE_DESERT);
+    }
+    else
+    {
+        if(moisture > 0.8f)
+        {
+            return(BIOME_TYPE_JUNGLE);
+        }
+        else
+        {
+            return(BIOME_TYPE_PLAIN);
+        }
+    }
+
+    return(BIOME_TYPE_NULL);
+}
 
 int main(void)
 {
-    color_rgb biome_color_table[BIOME_TYPE_COUNT] = { COLOR_BLACK, COLOR_BLUE };
-
-    s32 map_width = 64;
-    s32 map_height = 64;
+    srand((u32)time(NULL));
+    s32 map_width = 256; s32 map_height = 256;
+    
     tile_data* map_tile_grid = (tile_data*)malloc(sizeof(tile_data) * map_width * map_height);
     for(s32 i = 0; i < map_width; i++)
     {
         for(s32 j = 0; j < map_height; j++)
         {
             map_tile_grid[IDX2D(i, j, map_width)] = {};
-            map_tile_grid[IDX2D(i, j, map_width)].biome_id = BIOME_TYPE_OCEAN;
+            map_tile_grid[IDX2D(i, j, map_width)].elevation = RandomFloat(0.0f, 1.0f);
+            map_tile_grid[IDX2D(i, j, map_width)].moisture = RandomFloat(0.0f, 1.0f);
         }
     }
 
@@ -60,7 +110,14 @@ int main(void)
     {
         for(s32 j = 0; j < map_height; j++)
         {
-            output_image[IDX2D(i, j, map_width)] = biome_color_table[map_tile_grid[IDX2D(i, j, map_width)].biome_id];
+            f32 elevation = map_tile_grid[IDX2D(i, j, map_width)].elevation;
+            f32 moisture = map_tile_grid[IDX2D(i, j, map_width)].moisture;
+            f32 equator = (f32)(map_height - 1) / 2.0f;
+            f32 distance_from_equator = fabsf((f32)j - equator) / 31.5f;
+            f32 temperature = 1.0f - ((distance_from_equator + elevation) / 2.0f);
+            biome_type_id biome = EvaluateBiome(elevation, moisture, temperature);
+
+            output_image[IDX2D(i, j, map_width)] = biome_color_table[biome];
         }
     }
 
@@ -74,6 +131,6 @@ int main(void)
     {
         printf("wrote image: %s.\n", filename);
     }
-
+    
     return(0);
 }
