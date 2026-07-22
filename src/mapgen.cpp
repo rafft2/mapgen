@@ -23,6 +23,9 @@ enum biome_type_id : u16
     BIOME_TYPE_PLAIN,
     BIOME_TYPE_DESERT,
     BIOME_TYPE_JUNGLE,
+    BIOME_TYPE_MARSH,
+    BIOME_TYPE_FOREST,
+    BIOME_TYPE_TUNDRA,
 
     BIOME_TYPE_COUNT,
 };
@@ -46,7 +49,13 @@ color_rgb COLOR_GREEN = ColorRGB(0, 255, 0);
 color_rgb COLOR_MUSTARD_GREEN = ColorRGB(110, 110, 48);
 color_rgb COLOR_BLUE = ColorRGB(0, 0, 255);
 color_rgb COLOR_YELLOW = ColorRGB(255, 255, 0);
-color_rgb biome_color_table[BIOME_TYPE_COUNT] = { COLOR_BLACK, COLOR_BLUE, COLOR_WHITE, COLOR_GREEN, COLOR_YELLOW, COLOR_MUSTARD_GREEN }; 
+color_rgb COLOR_PURPLE = ColorRGB(127, 0, 127);
+color_rgb COLOR_DARK_GREEN = ColorRGB(0, 0, 127);
+color_rgb COLOR_LIGHT_BLUE = ColorRGB(127, 127, 255);
+color_rgb biome_color_table[BIOME_TYPE_COUNT] = { COLOR_BLACK, COLOR_BLUE, COLOR_WHITE,
+                                                 COLOR_GREEN, COLOR_YELLOW, COLOR_MUSTARD_GREEN,
+                                                 COLOR_PURPLE, COLOR_DARK_GREEN, COLOR_LIGHT_BLUE };
+char *biome_name_table[BIOME_TYPE_COUNT] = { "The void", "Ocean", "Mountain", "Plain", "Desert", "Jungle", "Marsh", "Forest", "Tundra" };
 
 struct tile_data
 {
@@ -71,28 +80,52 @@ f32 SampleNoise(f32 x, f32 y, f32 scale)
 
 biome_type_id EvaluateBiome(f32 elevation, f32 moisture, f32 temperature)
 {
-    if(elevation < 0.2f)
+    if(elevation < 0.15f)
     {
         return(BIOME_TYPE_OCEAN);
     }
-    if(elevation > 0.8f)
+    if(elevation > 0.75f)
     {
         return(BIOME_TYPE_MOUNTAIN);
     }
-    
-    if(temperature > 0.7f && moisture < 0.4f)
+    else if(elevation > 0.6f)
     {
-        return(BIOME_TYPE_DESERT);
-    }
-    else
-    {
-        if(moisture > 0.4f)
+        if(moisture < 0.5f)
         {
-            return(BIOME_TYPE_JUNGLE);
+            return(BIOME_TYPE_MOUNTAIN);
         }
         else
         {
-            return(BIOME_TYPE_PLAIN);
+            return(BIOME_TYPE_TUNDRA);
+        }
+    }
+    else
+    {
+        if(temperature > 0.7f)
+        {
+            if(moisture > 0.5f)
+            {
+                return(BIOME_TYPE_JUNGLE);
+            }
+            else
+            {
+                return(BIOME_TYPE_DESERT);
+            }
+        }
+        else
+        {
+            if(moisture > 0.7f)
+            {
+                return(BIOME_TYPE_MARSH);
+            }
+            else if(moisture > 0.4f)
+            {
+                return(BIOME_TYPE_FOREST);
+            }
+            else
+            {
+                return(BIOME_TYPE_PLAIN);
+            }
         }
     }
 
@@ -106,6 +139,7 @@ int main(void)
     f32 scale = 2.5f / (f32)(map_width);
     f32 max_elevation = 0.0f;
     f32 max_moisture = 0.0f;
+    s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
     
     tile_data* map_tile_grid = (tile_data*)malloc(sizeof(tile_data) * map_width * map_height);
     for(s32 i = 0; i < map_width; i++)
@@ -141,8 +175,14 @@ int main(void)
             f32 temperature = 1.0f - ((distance_from_equator + elevation) / 2.0f);
             biome_type_id biome = EvaluateBiome(elevation, moisture, temperature);
 
+            biome_stat_table[biome]++;
             output_image[IDX2D(i, j, map_width)] = biome_color_table[biome];
         }
+    }
+
+    for(s32 i = 0; i < BIOME_TYPE_COUNT; i++)
+    {
+        printf("Number of %s biome: %d.\n", biome_name_table[i], biome_stat_table[i]);
     }
 
     const char *filename = "output/map.png";
