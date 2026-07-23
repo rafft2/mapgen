@@ -166,7 +166,7 @@ void PrintLineEveryN(s32 i, s32 N)
     if((i+1) % N == 0) { printf("\n"); }
 }
 
-s32 GetMinDistanceFromLand(s32 ax, s32 ay, vec2i *continent_centers, s32 continent_count)
+s32 GetMinDistanceFromAnyContinentCenter(s32 ax, s32 ay, vec2i *continent_centers, s32 continent_count)
 {
     s32 min_distance_from_land = INT_MAX;
     for(s32 idx = 0; idx < continent_count; idx++)
@@ -183,6 +183,12 @@ s32 GetMinDistanceFromLand(s32 ax, s32 ay, vec2i *continent_centers, s32 contine
 int main(void)
 {
     srand((u32)time(NULL));
+
+    // NOTE: consider using km as standard dims:
+    // s32 earth_width_km = 40000;
+    // s32 earth_height_km = 20000;
+    // then divide by map_width and map_height to get 1 tile dims
+    // for example on a 4000x2000 map every tile would be 10km x 10km
     s32 map_width = 512; s32 map_height = 512;
     f32 scale = 2.5f / (f32)(map_width);
     f32 max_elevation = 0.0f;
@@ -205,7 +211,7 @@ int main(void)
                 s32 distance_from_top = map_height - y;
                 s32 distance_from_left = x;
                 s32 distance_from_right = map_width - x;
-                s32 min_distance_from_land = GetMinDistanceFromLand(x, y, continent_centers, continent_count);
+                s32 min_distance_from_land = GetMinDistanceFromAnyContinentCenter(x, y, continent_centers, continent_count);
                 s32 min = MIN(distance_from_bottom, MIN(distance_from_top, MIN(distance_from_left, MIN(distance_from_right, min_distance_from_land))));
                 if(min > max_distance_in_tiles)
                 {
@@ -226,21 +232,20 @@ int main(void)
     }
     
     tile_data* map_tile_grid = (tile_data*)malloc(sizeof(tile_data) * map_width * map_height);
-    // TODO: probably the loop variable names to x and y
-    for(s32 i = 0; i < map_width; i++)
+    for(s32 x = 0; x < map_width; x++)
     {
-        for(s32 j = 0; j < map_height; j++)
+        for(s32 y = 0; y < map_height; y++)
         {
-            map_tile_grid[IDX2D(i, j, map_width)] = {};
-            f32 elevation = fabsf(SampleNoise((f32)i, (f32)j, scale));
-            map_tile_grid[IDX2D(i, j, map_width)].elevation = elevation;
+            map_tile_grid[IDX2D(x, y, map_width)] = {};
+            f32 elevation = fabsf(SampleNoise((f32)x, (f32)y, scale));
+            map_tile_grid[IDX2D(x, y, map_width)].elevation = elevation;
             if(elevation > max_elevation)
             {
                 max_elevation = elevation;
             }
 
-            f32 moisture = fabsf(SampleNoise((f32)i + 1000.0f, (f32)j + 1000.0f, scale * 2.0f));
-            map_tile_grid[IDX2D(i, j, map_width)].moisture = moisture;
+            f32 moisture = fabsf(SampleNoise((f32)x + 1000.0f, (f32)y + 1000.0f, scale * 2.0f));
+            map_tile_grid[IDX2D(x, y, map_width)].moisture = moisture;
             if(moisture > max_moisture)
             {
                 max_moisture = moisture;
@@ -249,29 +254,29 @@ int main(void)
     }
 
     color_rgb* output_image = (color_rgb*)malloc(sizeof(color_rgb) * map_width * map_height);
-    for(s32 i = 0; i < map_width; i++)
+    for(s32 x = 0; x < map_width; x++)
     {
-        for(s32 j = 0; j < map_height; j++)
+        for(s32 y = 0; y < map_height; y++)
         {
-            f32 elevation = map_tile_grid[IDX2D(i, j, map_width)].elevation / max_elevation;
+            f32 elevation = map_tile_grid[IDX2D(x, y, map_width)].elevation / max_elevation;
             f32 denom = continent_count > 2 ? 0.5f*powf(2.0f, (f32)((s32)sqrtf((f32)continent_count + 1))) : 2.0f;
             f32 max_distance = ((f32)map_width) * (sqrtf(2.0f) / denom);
-            f32 min_distance_from_land = (f32)GetMinDistanceFromLand(i, j, continent_centers, continent_count);
+            f32 min_distance_from_land = (f32)GetMinDistanceFromAnyContinentCenter(x, y, continent_centers, continent_count);
             
             // distance in [0, 1]
             f32 normalized_distance = min_distance_from_land / max_distance;
             f32 continentality = 1.0f - normalized_distance;
-            // 3 hours on desmos produced this abomination
+            
             elevation = continentality * elevation * expf(0.1f * Clampf(continentality - 0.5f, 0.0f, 1.0f) / (1.0f - continentality));
 
-            f32 moisture = map_tile_grid[IDX2D(i, j, map_width)].moisture / max_moisture;
+            f32 moisture = map_tile_grid[IDX2D(x, y, map_width)].moisture / max_moisture;
             f32 equator = (f32)(map_height - 1) / 2.0f;
-            f32 distance_from_equator = fabsf((f32)j - equator) / equator;
+            f32 distance_from_equator = fabsf((f32)y - equator) / equator;
             f32 temperature = 1.0f - ((distance_from_equator + elevation) / 2.0f);
             biome_type_id biome = EvaluateBiome(elevation, moisture, temperature);
 
             biome_stat_table[biome]++;
-            output_image[IDX2D(i, j, map_width)] = biome_color_table[biome];
+            output_image[IDX2D(x, y, map_width)] = biome_color_table[biome];
         }
     }
 
