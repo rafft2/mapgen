@@ -3,3 +3,6 @@
 
 ## Some "coherent-looking" terrain
 ![](images/map2.png)
+
+## Warped noise
+![](images/map3.png)

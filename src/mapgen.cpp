@@ -8,12 +8,8 @@
 #include "stb_image_write.h"
 #pragma warning(pop)
 
-#define STB_PERLIN_IMPLEMENTATION
-#pragma warning(push, 0)
-#include "stb_perlin.h"
-#pragma warning(pop)
-
 #include "nom.h"
+#include "noise.h"
 
 enum biome_type_id : u16
 {
@@ -26,6 +22,9 @@ enum biome_type_id : u16
     BIOME_TYPE_MARSH,
     BIOME_TYPE_FOREST,
     BIOME_TYPE_TUNDRA,
+    BIOME_TYPE_HIGHLAND,
+    BIOME_TYPE_SAVANNAH,
+    BIOME_TYPE_SHALLOW_OCEAN,
 
     BIOME_TYPE_COUNT,
 };
@@ -47,15 +46,19 @@ color_rgb COLOR_BLACK = ColorRGB(0, 0, 0);
 color_rgb COLOR_WHITE = ColorRGB(255, 255, 255);
 color_rgb COLOR_GREEN = ColorRGB(0, 255, 0);
 color_rgb COLOR_MUSTARD_GREEN = ColorRGB(110, 110, 48);
-color_rgb COLOR_BLUE = ColorRGB(0, 0, 255);
+color_rgb COLOR_DARK_BLUE = ColorRGB(0, 0, 255);
 color_rgb COLOR_YELLOW = ColorRGB(255, 255, 0);
 color_rgb COLOR_PURPLE = ColorRGB(127, 0, 127);
 color_rgb COLOR_DARK_GREEN = ColorRGB(0, 127, 0);
 color_rgb COLOR_LIGHT_BLUE = ColorRGB(127, 127, 255);
-color_rgb biome_color_table[BIOME_TYPE_COUNT] = { COLOR_BLACK, COLOR_BLUE, COLOR_WHITE,
-                                                 COLOR_GREEN, COLOR_YELLOW, COLOR_MUSTARD_GREEN,
-                                                 COLOR_PURPLE, COLOR_DARK_GREEN, COLOR_LIGHT_BLUE };
-char *biome_name_table[BIOME_TYPE_COUNT] = { "The void", "Ocean", "Mountain", "Plain", "Desert", "Jungle", "Marsh", "Forest", "Tundra" };
+color_rgb COLOR_DARK_GREY = ColorRGB(50, 40, 30);
+color_rgb COLOR_ORANGE = ColorRGB(200, 160, 140);
+color_rgb COLOR_BLUE = ColorRGB(50, 50, 255);
+color_rgb biome_color_table[BIOME_TYPE_COUNT] = { COLOR_BLACK, COLOR_DARK_BLUE, COLOR_WHITE,
+                                                  COLOR_GREEN, COLOR_YELLOW, COLOR_MUSTARD_GREEN,
+                                                  COLOR_PURPLE, COLOR_DARK_GREEN, COLOR_LIGHT_BLUE,
+                                                  COLOR_DARK_GREY, COLOR_ORANGE, COLOR_BLUE };
+char *biome_name_table[BIOME_TYPE_COUNT] = { "The void", "Ocean", "Mountain", "Plain", "Desert", "Jungle", "Marsh", "Forest", "Tundra", "Highlands", "Savannah", "Shallow Ocean" };
 
 struct tile_data
 {
@@ -79,40 +82,55 @@ s32 RandomInt(s32 min, s32 max)
     return(result);
 }
 
-f32 SampleNoise(f32 x, f32 y, f32 scale)
-{
-    f32 result = stb_perlin_fbm_noise3(x * scale * 5.0f, y * scale * 5.0f, 0.0f, 2.0f, 0.5f, 8);
-    return(result);
-}
-
 biome_type_id EvaluateBiome(f32 elevation, f32 moisture, f32 temperature)
 {
-    if(elevation < 0.15f)
+    if(elevation < 0.46f)
     {
         return(BIOME_TYPE_OCEAN);
     }
-    if(elevation > 0.9f)
+    if(elevation < 0.5f)
+    {
+        return(BIOME_TYPE_SHALLOW_OCEAN);
+    }
+
+    if(elevation > 0.95f)
     {
         return(BIOME_TYPE_MOUNTAIN);
     }
-    else if(elevation > 0.5f)
+
+    if(elevation > 0.75f)
     {
-        if(moisture > 0.2f)
+        if(temperature > 0.5f)
         {
-            return(BIOME_TYPE_TUNDRA);
+            return(BIOME_TYPE_HIGHLAND);
         }
         else
         {
-            return(BIOME_TYPE_MOUNTAIN);
+            if(moisture > 0.5f)
+            {
+                return(BIOME_TYPE_TUNDRA);
+            }
+            else
+            {
+                return(BIOME_TYPE_MOUNTAIN);
+            }
         }
     }
     else
     {
-        if(temperature > 0.7f)
+        if(temperature > 0.95f)
         {
-            if(moisture > 0.2f)
+            return(BIOME_TYPE_DESERT);
+        }
+        else if(temperature > 0.65f)
+        {
+            if(moisture > 0.65f)
             {
                 return(BIOME_TYPE_JUNGLE);
+            }
+            else if(moisture > 0.5f)
+            {
+                return(BIOME_TYPE_SAVANNAH);
             }
             else
             {
@@ -121,11 +139,11 @@ biome_type_id EvaluateBiome(f32 elevation, f32 moisture, f32 temperature)
         }
         else
         {
-            if(moisture > 0.5f)
+            if(moisture > 0.7f)
             {
                 return(BIOME_TYPE_MARSH);
             }
-            else if(moisture > 0.2f)
+            else if(moisture > 0.5f)
             {
                 return(BIOME_TYPE_FOREST);
             }
@@ -180,21 +198,26 @@ s32 GetMinDistanceFromAnyContinentCenter(s32 ax, s32 ay, vec2i *continent_center
     return(min_distance_from_land);
 }
 
+#include "float.h"
+
 int main(void)
 {
-    srand((u32)time(NULL));
+    s32 seed = (s32)time(NULL);
+    srand((u32)seed);
 
     // NOTE: consider using km as standard dims:
     // s32 earth_width_km = 40000;
     // s32 earth_height_km = 20000;
     // then divide by map_width and map_height to get 1 tile dims
     // for example on a 4000x2000 map every tile would be 10km x 10km
-    s32 map_width = 512; s32 map_height = 512;
-    f32 scale = 2.5f / (f32)(map_width);
-    f32 max_elevation = 0.0f;
-    f32 max_moisture = 0.0f;
+    s32 map_width = 1024; s32 map_height = 512;
+    f32 noise_scale = 16.0f / (f32)(map_width);
+    f32 max_elevation = -FLT_MAX/2.0f;
+    f32 max_moisture = -FLT_MAX/2.0f;
+    f32 min_elevation = FLT_MAX/2.0f;
+    f32 min_moisture = FLT_MAX/2.0f;
     s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
-    s32 continent_count = RandomInt(1, 8);
+    s32 continent_count = RandomInt(1, 6);
     vec2i *continent_centers = (vec2i*)malloc(sizeof(vec2i) * continent_count);
     s32 continent_idx = 0;
     continent_centers[continent_idx++] = RandomMapPosition(map_width, map_height);
@@ -224,31 +247,35 @@ int main(void)
         continent_centers[continent_idx++] = {best_x, best_y};
     }
 
-    printf("Continent count: %d.\n", continent_count);
-    for(s32 i = 0; i < continent_count; i++)
-    {
-        printf("Continent %d center: %d %d.  ", i, continent_centers[i].x, continent_centers[i].y);
-        PrintLineEveryN(i, 3);
-    }
-    
     tile_data* map_tile_grid = (tile_data*)malloc(sizeof(tile_data) * map_width * map_height);
     for(s32 x = 0; x < map_width; x++)
     {
         for(s32 y = 0; y < map_height; y++)
         {
+            f32 nx = (f32)x * noise_scale;
+            f32 ny = (f32)y * noise_scale;
             map_tile_grid[IDX2D(x, y, map_width)] = {};
-            f32 elevation = fabsf(SampleNoise((f32)x, (f32)y, scale));
+            
+            f32 elevation = SampleWarpedFBM(nx, ny, seed);
             map_tile_grid[IDX2D(x, y, map_width)].elevation = elevation;
             if(elevation > max_elevation)
             {
                 max_elevation = elevation;
             }
+            else if(elevation < min_elevation)
+            {
+                min_elevation = elevation;
+            }
 
-            f32 moisture = fabsf(SampleNoise((f32)x + 1000.0f, (f32)y + 1000.0f, scale * 2.0f));
+            f32 moisture = SampleWarpedFBM(nx + 17.51f, ny + 31.82f, seed);
             map_tile_grid[IDX2D(x, y, map_width)].moisture = moisture;
             if(moisture > max_moisture)
             {
                 max_moisture = moisture;
+            }
+            else if(moisture < min_moisture)
+            {
+                min_moisture = moisture;
             }
         }
     }
@@ -258,7 +285,7 @@ int main(void)
     {
         for(s32 y = 0; y < map_height; y++)
         {
-            f32 elevation = map_tile_grid[IDX2D(x, y, map_width)].elevation / max_elevation;
+            f32 elevation = map_tile_grid[IDX2D(x, y, map_width)].elevation;
             f32 denom = continent_count > 2 ? 0.5f*powf(2.0f, (f32)((s32)sqrtf((f32)continent_count + 1))) : 2.0f;
             f32 max_distance = ((f32)map_width) * (sqrtf(2.0f) / denom);
             f32 min_distance_from_land = (f32)GetMinDistanceFromAnyContinentCenter(x, y, continent_centers, continent_count);
@@ -266,10 +293,11 @@ int main(void)
             // distance in [0, 1]
             f32 normalized_distance = min_distance_from_land / max_distance;
             f32 continentality = 1.0f - normalized_distance;
-            
-            elevation = continentality * elevation * expf(0.1f * Clampf(continentality - 0.5f, 0.0f, 1.0f) / (1.0f - continentality));
+            f32 multiplier = expf(Clampf((continentality - 0.5f) / 2.0f, -0.5f, 0.1f));
+            elevation = elevation * continentality * multiplier;
+            elevation = Clampf(elevation, 0.0f, 1.0f);
 
-            f32 moisture = map_tile_grid[IDX2D(x, y, map_width)].moisture / max_moisture;
+            f32 moisture = map_tile_grid[IDX2D(x, y, map_width)].moisture;
             f32 equator = (f32)(map_height - 1) / 2.0f;
             f32 distance_from_equator = fabsf((f32)y - equator) / equator;
             f32 temperature = 1.0f - ((distance_from_equator + elevation) / 2.0f);
@@ -279,14 +307,6 @@ int main(void)
             output_image[IDX2D(x, y, map_width)] = biome_color_table[biome];
         }
     }
-
-    printf("\n========= MAP RESULTS =========\n");
-    for(s32 i = 0; i < BIOME_TYPE_COUNT; i++)
-    {
-        printf("%s: %d (%.1f%%).  ", biome_name_table[i], biome_stat_table[i], (f32)biome_stat_table[i] * 100.0f / (f32)(map_width * map_height));
-        PrintLineEveryN(i, 3);
-    }
-    printf("\n\n");
 
     const char *filename = "output/map.png";
     s32 ok = stbi_write_png(filename, map_width, map_height, 3, (u8*)output_image, 3 * map_width);
@@ -298,6 +318,23 @@ int main(void)
     {
         printf("wrote image: %s.\n", filename);
     }
-    
+
+    printf("\n========= MAP RESULTS =========\n");
+    printf("Continent count: %d.\n", continent_count);
+    for(s32 i = 0; i < continent_count; i++)
+    {
+        printf("Continent %d center: %d %d.  ", i, continent_centers[i].x, continent_centers[i].y);
+        PrintLineEveryN(i, 3);
+    }
+    printf("\n");
+    for(s32 i = 0; i < BIOME_TYPE_COUNT; i++)
+    {
+        printf("%s: %d (%.1f%%).  ", biome_name_table[i], biome_stat_table[i], (f32)biome_stat_table[i] * 100.0f / (f32)(map_width * map_height));
+        PrintLineEveryN(i, 3);
+    }
+    printf("\n========= STATS =========\n");
+    printf("moist min/max: %f, %f\n", min_moisture, max_moisture);
+    printf("elev min/max: %f, %f\n", min_elevation, max_elevation);
+
     return(0);
 }
