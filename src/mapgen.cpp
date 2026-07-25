@@ -300,7 +300,7 @@ void AssignAndApplyTectonicPlates(tile_data *map, s32 width, s32 height, plate_d
             map[IDX2D(x, y, width)].plate_index = closest_seed;
             if(plates[closest_seed].type == CRUST_TYPE_CONTINENTAL)
             {
-                map[IDX2D(x, y, width)].elevation = (map[IDX2D(x, y, width)].elevation / 2.0f) + 0.5f;
+                map[IDX2D(x, y, width)].elevation = (map[IDX2D(x, y, width)].elevation / 1.428f) + 0.3f;
             }
             else
             {
@@ -322,7 +322,7 @@ int main(void)
     s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
     tile_data* map_tile_grid = (tile_data*)calloc((u32)(map_width * map_height), sizeof(tile_data));
     
-    s32 plate_count = RandomInt(16, 24);
+    s32 plate_count = RandomInt(13, 20);
     plate_data *plates = (plate_data*)malloc(sizeof(plate_data) * plate_count);
     GenerateNoiseMap(map_tile_grid, map_width, map_height, seed);
     AssignAndApplyTectonicPlates(map_tile_grid, map_width, map_height, plates, plate_count);
@@ -376,7 +376,7 @@ int main(void)
                 {
                     final_collision_resolution = PLATE_COLLISION_CONVERGENT;
                 }
-                else
+                else if(divergent_collision_count > convergent_collision_count)
                 {
                     final_collision_resolution = PLATE_COLLISION_DIVERGENT;
                 }
@@ -387,16 +387,16 @@ int main(void)
                 {
                     final_collision_resolution = PLATE_COLLISION_SLIDING;
                 }
-                else
+                else if(divergent_collision_count > sliding_collision_count)
                 {
                     final_collision_resolution = PLATE_COLLISION_DIVERGENT;
                 }
             }
             
             f32 elevation_offset = 0.0f;
-            if(final_collision_resolution == PLATE_COLLISION_DIVERGENT && divergent_collision_count != 0)
+            if(final_collision_resolution == PLATE_COLLISION_DIVERGENT)
             {
-                elevation_offset = -0.2f;
+                elevation_offset = -0.05f;
                 collision_direction_map[IDX2D(x, y, map_width)] = 255u;
             }
             else if(final_collision_resolution == PLATE_COLLISION_SLIDING)
@@ -547,7 +547,7 @@ int main(void)
             ASSERT(normalized_distance >= 0.0f && normalized_distance <= 1.0f);
 
             f32 continentality = 1.0f - normalized_distance;
-            f32 multiplier = expf(Clampf((continentality - 0.5f) / 2.0f, -0.5f, 0.1f));
+            f32 multiplier = expf(-Clampf(continentality - 0.5f, -0.5f, 0.1f) / PI32);
             elevation = elevation * continentality * multiplier;
             elevation = Clampf(elevation, 0.0f, 1.0f);
 
