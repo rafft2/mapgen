@@ -178,20 +178,6 @@ void PrintLineEveryN(s32 i, s32 N)
     if((i+1) % N == 0) { printf("\n"); }
 }
 
-s32 GetMinDistanceFromAnyContinentCenter(s32 ax, s32 ay, vec2i *continent_centers, s32 continent_count)
-{
-    s32 min_distance_from_land = INT_MAX;
-    for(s32 idx = 0; idx < continent_count; idx++)
-    {
-        s32 dist = ComputeDistanceInTiles(ax, ay, continent_centers[idx]);
-        if(dist < min_distance_from_land)
-        {
-            min_distance_from_land = dist;
-        }
-    }
-    return(min_distance_from_land);
-}
-
 #include "float.h"
 
 enum direction : u8
@@ -211,6 +197,53 @@ enum direction : u8
 
 vec2i adjacent_tile_from_direction[DIRECTION_COUNT] = { {0, 0}, {0, -1}, {-1, -1}, {-1, 0}, {-1, 1}, {0, 1}, {1, 1}, {1, 0}, {1, -1} };
 
+enum crust_type : u8
+{
+    CRUST_TYPE_CONTINENTAL = 0,
+    CRUST_TYPE_OCEANIC,
+
+    CRUST_TYPE_COUNT
+};
+
+enum plate_collision_type : u8
+{
+    PLATE_COLLISION_NONE = 0,
+    PLATE_COLLISION_CONVERGENT,
+    PLATE_COLLISION_DIVERGENT,
+    PLATE_COLLISION_SLIDING,
+
+    PLATE_COLLISION_COUNT
+};
+
+struct plate_data
+{
+    vec2i seed;
+    direction drifting_direction;
+    crust_type type;
+};
+
+s32 GetMinDistanceFromContinentalSeed(s32 ax, s32 ay, u8 tile_plate_index, plate_data *plates, s32 plate_count)
+{
+    if(plates[tile_plate_index].type == CRUST_TYPE_CONTINENTAL)
+    {
+        s32 result = ComputeDistanceInTiles(ax, ay, plates[tile_plate_index].seed);
+        return(result);
+    }
+
+    s32 min_distance_from_land = INT_MAX;
+    for(s32 idx = 0; idx < plate_count; idx++)
+    {
+        if(plates[idx].type == CRUST_TYPE_OCEANIC) { continue; }
+
+        s32 dist = ComputeDistanceInTiles(ax, ay, plates[idx].seed);
+        if(dist < min_distance_from_land)
+        {
+            min_distance_from_land = dist;
+        }
+    }
+    return(min_distance_from_land);
+}
+
 struct tile_data
 {
     f32 elevation;
@@ -218,87 +251,182 @@ struct tile_data
 
     u8 water_descent_direction; // TODO: should water fall towards multiple directions?
     u32 water_accumulation_count;
+
+    u8 plate_index;
 };
 
-
-int main(void)
+void GenerateNoiseMap(tile_data *map_tile_grid, s32 map_width, s32 map_height, s32 seed)
 {
-    s32 seed = (s32)time(NULL);
-    srand((u32)seed);
-
-    // NOTE: consider using km as standard dims:
-    // s32 earth_width_km = 40000;
-    // s32 earth_height_km = 20000;
-    // then divide by map_width and map_height to get 1 tile dims
-    // for example on a 4000x2000 map every tile would be 10km x 10km
-    s32 map_width = 1024; s32 map_height = 512;
     f32 noise_scale = 16.0f / (f32)(map_width);
-    f32 max_elevation = -FLT_MAX/2.0f;
-    f32 max_moisture = -FLT_MAX/2.0f;
-    f32 min_elevation = FLT_MAX/2.0f;
-    f32 min_moisture = FLT_MAX/2.0f;
-    s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
-    s32 continent_count = RandomInt(2, 8);
-    vec2i *continent_centers = (vec2i*)malloc(sizeof(vec2i) * continent_count);
-    s32 continent_idx = 0;
-    continent_centers[continent_idx++] = RandomMapPosition(map_width, map_height);
-    while(continent_idx < continent_count)
-    {
-        s32 max_distance_in_tiles = 0;
-        s32 best_x = 0;
-        s32 best_y = 0;
-        for(s32 x = 0; x < map_width; x++)
-        {
-            for(s32 y = 0; y < map_height; y++)
-            {
-                s32 distance_from_bottom = y;
-                s32 distance_from_top = map_height - y;
-                s32 distance_from_left = x;
-                s32 distance_from_right = map_width - x;
-                s32 min_distance_from_land = GetMinDistanceFromAnyContinentCenter(x, y, continent_centers, continent_count);
-                s32 min = MIN(distance_from_bottom, MIN(distance_from_top, MIN(distance_from_left, MIN(distance_from_right, min_distance_from_land))));
-                if(min > max_distance_in_tiles)
-                {
-                    max_distance_in_tiles = min;
-                    best_x = x;
-                    best_y = y;
-                }
-            }
-        }
-        continent_centers[continent_idx++] = {best_x, best_y};
-    }
-
-    tile_data* map_tile_grid = (tile_data*)malloc(sizeof(tile_data) * map_width * map_height);
     for(s32 x = 0; x < map_width; x++)
     {
         for(s32 y = 0; y < map_height; y++)
         {
             f32 nx = (f32)x * noise_scale;
             f32 ny = (f32)y * noise_scale;
-            map_tile_grid[IDX2D(x, y, map_width)] = {};
-            map_tile_grid[IDX2D(x, y, map_width)].water_accumulation_count = 0;
             
-            f32 elevation = SampleWarpedFBM(nx, ny, seed);
-            map_tile_grid[IDX2D(x, y, map_width)].elevation = elevation;
-            if(elevation > max_elevation)
+            map_tile_grid[IDX2D(x, y, map_width)].elevation = SampleWarpedFBM(nx, ny, seed);;
+            map_tile_grid[IDX2D(x, y, map_width)].moisture = SampleWarpedFBM(nx + 17.51f, ny + 31.82f, seed);;
+        }
+    }
+}
+
+// TODO: duplicate use of the word "seed" between noise/rng and plates assignement
+void AssignAndApplyTectonicPlates(tile_data *map, s32 width, s32 height, plate_data *plates, s32 plate_count)
+{
+    for(s32 i = 0; i < plate_count; i++)
+    {
+        plates[i].seed.x = RandomInt(0, width - 1);
+        plates[i].seed.y = RandomInt(0, height - 1);
+        plates[i].drifting_direction = (direction)RandomInt(1, DIRECTION_COUNT - 1);
+        plates[i].type = (crust_type)RandomInt(0, 1);
+    }
+    
+    for(s32 x = 0; x < width; x++)
+    {
+        for(s32 y = 0; y < height; y++)
+        {
+            s32 closest_dist = INT_MAX;
+            u8 closest_seed = 0;
+            for(s32 i = 0; i < plate_count; i++)
             {
-                max_elevation = elevation;
+                s32 distance = ComputeDistanceInTiles(x, y, plates[i].seed);
+                if(distance < closest_dist)
+                {
+                    closest_dist = distance;
+                    closest_seed = (u8)i;
+                }
             }
-            else if(elevation < min_elevation)
+            map[IDX2D(x, y, width)].plate_index = closest_seed;
+            if(plates[closest_seed].type == CRUST_TYPE_CONTINENTAL)
             {
-                min_elevation = elevation;
+                map[IDX2D(x, y, width)].elevation = (map[IDX2D(x, y, width)].elevation / 2.0f) + 0.5f;
+            }
+            else
+            {
+                // Oceanic plate, starts at 0.0f
             }
 
-            f32 moisture = SampleWarpedFBM(nx + 17.51f, ny + 31.82f, seed);
-            map_tile_grid[IDX2D(x, y, map_width)].moisture = moisture;
-            if(moisture > max_moisture)
+        }
+    }
+}
+
+int main(void)
+{
+    s32 seed = (s32)time(NULL);
+    srand((u32)seed);
+
+    s32 map_width = 1024; s32 map_height = 512;
+    f32 min_elevation = FLT_MAX/2.0f; f32 max_elevation = -FLT_MAX/2.0f;
+    f32 min_moisture = FLT_MAX/2.0f; f32 max_moisture = -FLT_MAX/2.0f;
+    s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
+    tile_data* map_tile_grid = (tile_data*)calloc((u32)(map_width * map_height), sizeof(tile_data));
+    
+    s32 plate_count = RandomInt(16, 24);
+    plate_data *plates = (plate_data*)malloc(sizeof(plate_data) * plate_count);
+    GenerateNoiseMap(map_tile_grid, map_width, map_height, seed);
+    AssignAndApplyTectonicPlates(map_tile_grid, map_width, map_height, plates, plate_count);
+    
+    u8* collision_direction_map = (u8*)calloc((u32)map_width * map_height, sizeof(u8));
+    for(s32 x = 0; x < map_width; x++)
+    {
+        for(s32 y = 0; y < map_height; y++)
+        {
+            u8 plate_index = map_tile_grid[IDX2D(x, y, map_width)].plate_index;
+            vec2i position = { x, y };
+            s32 divergent_collision_count = 0;
+            s32 convergent_collision_count = 0;
+            s32 continental_convergent_count = 0;
+            s32 oceanic_convergent_count = 0;
+            s32 sliding_collision_count = 0;
+            plate_collision_type final_collision_resolution = PLATE_COLLISION_NONE;
+            for(s32 dir_idx = 1; dir_idx < DIRECTION_COUNT; dir_idx++)
             {
-                max_moisture = moisture;
+                vec2i other_position = position + adjacent_tile_from_direction[dir_idx];
+                if(IN_BOUNDS2D(other_position.x, other_position.y, map_width, map_height))
+                {
+                    u8 other_plate_index = map_tile_grid[IDX2D(other_position.x, other_position.y, map_width)].plate_index;
+                    if(plate_index != other_plate_index)
+                    {
+                        direction tile_drifting_direction = plates[plate_index].drifting_direction;
+                        direction other_drifting_direction = plates[other_plate_index].drifting_direction;
+
+                        vec2i direction_vector = adjacent_tile_from_direction[tile_drifting_direction];
+                        vec2i other_direction_vector = adjacent_tile_from_direction[other_drifting_direction];
+
+                        vec2i moved_position = position + direction_vector;
+                        vec2i other_moved_position = other_position + other_direction_vector;
+
+                        s32 distance = ComputeDistanceInTiles(moved_position.x, moved_position.y, other_moved_position);
+                        if (distance == 0)
+                        {
+                            convergent_collision_count++;
+                            crust_type other_crust_type = plates[other_plate_index].type;
+                            if(other_crust_type == CRUST_TYPE_CONTINENTAL) { continental_convergent_count++; }
+                            else { oceanic_convergent_count++; }
+                        }
+                        else if(distance == 1) { sliding_collision_count++; }
+                        else if(distance >= 2) { divergent_collision_count++; }
+                    }
+                }
             }
-            else if(moisture < min_moisture)
+            if(convergent_collision_count > sliding_collision_count)
             {
-                min_moisture = moisture;
+                if(convergent_collision_count > divergent_collision_count)
+                {
+                    final_collision_resolution = PLATE_COLLISION_CONVERGENT;
+                }
+                else
+                {
+                    final_collision_resolution = PLATE_COLLISION_DIVERGENT;
+                }
             }
+            else
+            {
+                if(sliding_collision_count > divergent_collision_count)
+                {
+                    final_collision_resolution = PLATE_COLLISION_SLIDING;
+                }
+                else
+                {
+                    final_collision_resolution = PLATE_COLLISION_DIVERGENT;
+                }
+            }
+            
+            f32 elevation_offset = 0.0f;
+            if(final_collision_resolution == PLATE_COLLISION_DIVERGENT && divergent_collision_count != 0)
+            {
+                elevation_offset = -0.2f;
+                collision_direction_map[IDX2D(x, y, map_width)] = 255u;
+            }
+            else if(final_collision_resolution == PLATE_COLLISION_SLIDING)
+            {
+                elevation_offset = 0.05f;
+                collision_direction_map[IDX2D(x, y, map_width)] = 50u;
+            }
+            else if(final_collision_resolution == PLATE_COLLISION_CONVERGENT)
+            {
+                crust_type tile_crust_type = plates[plate_index].type;
+                crust_type other_crust_type = continental_convergent_count >= oceanic_convergent_count ? CRUST_TYPE_CONTINENTAL : CRUST_TYPE_OCEANIC;
+                if(tile_crust_type == CRUST_TYPE_CONTINENTAL && other_crust_type == CRUST_TYPE_CONTINENTAL)
+                {
+                    elevation_offset = 0.3f;
+                }
+                else if(tile_crust_type == CRUST_TYPE_CONTINENTAL && other_crust_type == CRUST_TYPE_OCEANIC)
+                {
+                    elevation_offset = 0.05f;
+                }
+                else if(tile_crust_type == CRUST_TYPE_OCEANIC && other_crust_type == CRUST_TYPE_CONTINENTAL)
+                {
+                    elevation_offset = -0.05f;
+                }
+                else if(tile_crust_type == CRUST_TYPE_OCEANIC && other_crust_type == CRUST_TYPE_OCEANIC)
+                {
+                    elevation_offset = 0.25f;
+                }
+                collision_direction_map[IDX2D(x, y, map_width)] = 160u;
+            }
+            map_tile_grid[IDX2D(x, y, map_width)].elevation += elevation_offset;
         }
     }
 
@@ -356,6 +484,7 @@ int main(void)
     }
 
     u8* accumulation_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
+    u8* plates_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
     for(s32 x = 0; x < map_width; x++)
     {
         for(s32 y = 0; y < map_height; y++)
@@ -370,12 +499,38 @@ int main(void)
             {
                 map_tile_grid[IDX2D(x, y, map_width)].elevation -= (value * 0.1f);
             }
+
+            u8 plate_index = map_tile_grid[IDX2D(x, y, map_width)].plate_index;
+            crust_type type = plates[plate_index].type;
+            plates_map[IDX2D(x, y, map_width)] = type == CRUST_TYPE_OCEANIC ? 0u : 255u;
         }
     }
 
     if(!stbi_write_png("output/accumulation.png", map_width, map_height, 1, accumulation_map, 1 * map_width))
     {
         printf("error with stbi_write_png.\n");
+    }
+    if(!stbi_write_png("output/plates.png", map_width, map_height, 1, plates_map, 1 * map_width))
+    {
+        printf("error with stbi_write_png.\n");
+    }
+    if(!stbi_write_png("output/collisions.png", map_width, map_height, 1, collision_direction_map, 1 * map_width))
+    {
+        printf("error with stbi_write_png.\n");
+    }
+
+    f32 max_distance_from_continental_seed = 0.0f;
+    for(s32 x = 0; x < map_width; x++)
+    {
+        for(s32 y = 0; y < map_height; y++)
+        {
+            u8 tile_plate_index = map_tile_grid[IDX2D(x, y, map_width)].plate_index;
+            f32 dist = (f32)GetMinDistanceFromContinentalSeed(x, y, tile_plate_index, plates, plate_count);
+            if(dist > max_distance_from_continental_seed)
+            {
+                max_distance_from_continental_seed = dist;
+            }
+        }
     }
 
     color_rgb* output_image = (color_rgb*)malloc(sizeof(color_rgb) * map_width * map_height);
@@ -384,12 +539,13 @@ int main(void)
         for(s32 y = 0; y < map_height; y++)
         {
             f32 elevation = map_tile_grid[IDX2D(x, y, map_width)].elevation;
-            f32 denom = continent_count > 2 ? 0.5f*powf(2.0f, (f32)((s32)sqrtf((f32)continent_count + 1))) : 2.0f;
-            f32 max_distance = ((f32)map_width) * (sqrtf(2.0f) / denom);
-            f32 min_distance_from_land = (f32)GetMinDistanceFromAnyContinentCenter(x, y, continent_centers, continent_count);
-            
+            u8 tile_plate_index = map_tile_grid[IDX2D(x, y, map_width)].plate_index;
+            f32 min_distance_from_land = (f32)GetMinDistanceFromContinentalSeed(x, y, tile_plate_index, plates, plate_count);
+
             // distance in [0, 1]
-            f32 normalized_distance = min_distance_from_land / max_distance;
+            f32 normalized_distance = min_distance_from_land / max_distance_from_continental_seed;
+            ASSERT(normalized_distance >= 0.0f && normalized_distance <= 1.0f);
+
             f32 continentality = 1.0f - normalized_distance;
             f32 multiplier = expf(Clampf((continentality - 0.5f) / 2.0f, -0.5f, 0.1f));
             elevation = elevation * continentality * multiplier;
@@ -418,21 +574,13 @@ int main(void)
     }
 
     printf("\n========= MAP RESULTS =========\n");
-    printf("Continent count: %d.\n", continent_count);
-    for(s32 i = 0; i < continent_count; i++)
-    {
-        printf("Continent %d center: %d %d.  ", i, continent_centers[i].x, continent_centers[i].y);
-        PrintLineEveryN(i, 3);
-    }
-    printf("\n");
+    printf("Seed: %d.\n", seed);
     for(s32 i = 0; i < BIOME_TYPE_COUNT; i++)
     {
         printf("%s: %d (%.1f%%).  ", biome_name_table[i], biome_stat_table[i], (f32)biome_stat_table[i] * 100.0f / (f32)(map_width * map_height));
         PrintLineEveryN(i, 3);
     }
     printf("\n========= STATS =========\n");
-    printf("moist min/max: %f, %f\n", min_moisture, max_moisture);
-    printf("elev min/max: %f, %f\n", min_elevation, max_elevation);
 
     return(0);
 }
