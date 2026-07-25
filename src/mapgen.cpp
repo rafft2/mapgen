@@ -60,12 +60,6 @@ color_rgb biome_color_table[BIOME_TYPE_COUNT] = { COLOR_BLACK, COLOR_DARK_BLUE, 
                                                   COLOR_DARK_GREY, COLOR_ORANGE, COLOR_BLUE };
 char *biome_name_table[BIOME_TYPE_COUNT] = { "The void", "Ocean", "Mountain", "Plain", "Desert", "Jungle", "Marsh", "Forest", "Tundra", "Highlands", "Savannah", "Shallow Ocean" };
 
-struct tile_data
-{
-    f32 elevation;
-    f32 moisture;
-};
-
 #include "stdlib.h"
 #include "time.h"
 f32 RandomFloat(f32 min, f32 max)
@@ -200,6 +194,33 @@ s32 GetMinDistanceFromAnyContinentCenter(s32 ax, s32 ay, vec2i *continent_center
 
 #include "float.h"
 
+enum direction : u8
+{
+    DIRECTION_NONE = 0,
+    SOUTH,
+    SOUTH_WEST,
+    WEST,
+    NORTH_WEST,
+    NORTH,
+    NORTH_EAST,
+    EAST,
+    SOUTH_EAST,
+
+    DIRECTION_COUNT
+};
+
+vec2i adjacent_tile_from_direction[DIRECTION_COUNT] = { {0, 0}, {0, -1}, {-1, -1}, {-1, 0}, {-1, 1}, {0, 1}, {1, 1}, {1, 0}, {1, -1} };
+
+struct tile_data
+{
+    f32 elevation;
+    f32 moisture;
+
+    u8 water_descent_direction; // TODO: should water fall towards multiple directions?
+    u32 water_accumulation_count;
+};
+
+
 int main(void)
 {
     s32 seed = (s32)time(NULL);
@@ -217,7 +238,7 @@ int main(void)
     f32 min_elevation = FLT_MAX/2.0f;
     f32 min_moisture = FLT_MAX/2.0f;
     s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
-    s32 continent_count = RandomInt(1, 6);
+    s32 continent_count = RandomInt(2, 8);
     vec2i *continent_centers = (vec2i*)malloc(sizeof(vec2i) * continent_count);
     s32 continent_idx = 0;
     continent_centers[continent_idx++] = RandomMapPosition(map_width, map_height);
@@ -255,6 +276,7 @@ int main(void)
             f32 nx = (f32)x * noise_scale;
             f32 ny = (f32)y * noise_scale;
             map_tile_grid[IDX2D(x, y, map_width)] = {};
+            map_tile_grid[IDX2D(x, y, map_width)].water_accumulation_count = 0;
             
             f32 elevation = SampleWarpedFBM(nx, ny, seed);
             map_tile_grid[IDX2D(x, y, map_width)].elevation = elevation;
@@ -278,6 +300,82 @@ int main(void)
                 min_moisture = moisture;
             }
         }
+    }
+
+    for(s32 x = 0; x < map_width; x++)
+    {
+        for(s32 y = 0; y < map_height; y++)
+        {
+            f32 elev = map_tile_grid[IDX2D(x, y, map_width)].elevation;
+            u8 steepest_dir = DIRECTION_NONE;
+            f32 max_diff = 0.0f;
+            for(u8 dir = 0; dir < DIRECTION_COUNT; dir++)
+            {
+                vec2i pos = {x, y};
+                vec2i p_adjacent = pos + adjacent_tile_from_direction[dir];
+                if(IN_BOUNDS2D(p_adjacent.x, p_adjacent.y, map_width, map_height))
+                {
+                    f32 adj_elev = map_tile_grid[IDX2D(p_adjacent.x, p_adjacent.y, map_width)].elevation;
+                    f32 diff = elev - adj_elev;
+                    if(diff > max_diff)
+                    {
+                        max_diff = diff;
+                        steepest_dir = dir;
+                    }
+                } 
+            }
+            map_tile_grid[IDX2D(x, y, map_width)].water_descent_direction = steepest_dir;
+        }
+    }
+
+    u32 max_accumulation = 0;
+    for(s32 x = 0; x < map_width; x++)
+    {
+        for(s32 y = 0; y < map_height; y++)
+        {
+            vec2i current_pos = { x, y };
+            u8 current_dir = map_tile_grid[IDX2D(x, y, map_width)].water_descent_direction;
+            while(current_dir != DIRECTION_NONE)
+            { 
+                vec2i movement = adjacent_tile_from_direction[current_dir];
+                current_pos = current_pos + movement;
+
+                // It should be illegal to be out of bounds here
+                ASSERT(IN_BOUNDS2D(current_pos.x, current_pos.y, map_width, map_height));
+
+                map_tile_grid[IDX2D(current_pos.x, current_pos.y, map_width)].water_accumulation_count += 1;
+
+                // TODO: add function so that this kind of indexing becomes map_tile_grid.At(current_pos) or something similar
+                if(map_tile_grid[IDX2D(current_pos.x, current_pos.y, map_width)].water_accumulation_count > max_accumulation)
+                {
+                    max_accumulation = map_tile_grid[IDX2D(current_pos.x, current_pos.y, map_width)].water_accumulation_count;
+                }
+                current_dir = map_tile_grid[IDX2D(current_pos.x, current_pos.y, map_width)].water_descent_direction;
+            }
+        }
+    }
+
+    u8* accumulation_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
+    for(s32 x = 0; x < map_width; x++)
+    {
+        for(s32 y = 0; y < map_height; y++)
+        {
+            f32 accumulation = (f32)map_tile_grid[IDX2D(x, y, map_width)].water_accumulation_count;
+            f32 denom = (f32)max_accumulation;
+            f32 value = accumulation / denom; // [0, 1]
+            accumulation_map[IDX2D(x, y, map_width)] = (u8)(value * 255);
+
+            s32 iter_count = 16;
+            for(s32 i = 0; i < iter_count; i++)
+            {
+                map_tile_grid[IDX2D(x, y, map_width)].elevation -= (value * 0.1f);
+            }
+        }
+    }
+
+    if(!stbi_write_png("output/accumulation.png", map_width, map_height, 1, accumulation_map, 1 * map_width))
+    {
+        printf("error with stbi_write_png.\n");
     }
 
     color_rgb* output_image = (color_rgb*)malloc(sizeof(color_rgb) * map_width * map_height);
