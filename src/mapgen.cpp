@@ -248,6 +248,7 @@ struct tile_data
 {
     f32 elevation;
     f32 moisture;
+    f32 temperature;
 
     u8 water_descent_direction; // TODO: should water fall towards multiple directions?
     u32 water_accumulation_count;
@@ -265,8 +266,9 @@ void GenerateNoiseMap(tile_data *map_tile_grid, s32 map_width, s32 map_height, s
             f32 nx = (f32)x * noise_scale;
             f32 ny = (f32)y * noise_scale;
             
-            map_tile_grid[IDX2D(x, y, map_width)].elevation = SampleWarpedFBM(nx, ny, seed);;
-            map_tile_grid[IDX2D(x, y, map_width)].moisture = SampleWarpedFBM(nx + 17.51f, ny + 31.82f, seed);;
+            map_tile_grid[IDX2D(x, y, map_width)].elevation = SampleWarpedFBM(nx, ny, seed);
+            map_tile_grid[IDX2D(x, y, map_width)].moisture = SampleWarpedFBM(nx + 17.51f, ny + 31.82f, seed);
+            map_tile_grid[IDX2D(x, y, map_width)].temperature = SampleWarpedFBM(nx + 7.34f, ny + 53.227f, seed);
         }
     }
 }
@@ -552,9 +554,16 @@ int main(void)
             elevation = Clampf(elevation, 0.0f, 1.0f);
 
             f32 moisture = map_tile_grid[IDX2D(x, y, map_width)].moisture;
+            
             f32 equator = (f32)(map_height - 1) / 2.0f;
-            f32 distance_from_equator = fabsf((f32)y - equator) / equator;
-            f32 temperature = 1.0f - ((distance_from_equator + elevation) / 2.0f);
+            f32 distance_from_equator = fabsf((f32)y - equator) / equator; // [0, 1]
+            f32 temperature = (1.0f - ((distance_from_equator + elevation) / 2.0f)) / 1.428f; // [0, 0.7f] 
+            f32 noise_temp = map_tile_grid[IDX2D(x, y, map_width)].temperature / 3.33f; // [0, 0.3f]
+            temperature = Clampf(temperature + noise_temp, 0.0f, 1.0f);
+            
+            ASSERT(elevation >= 0.0f && elevation <= 1.0f);
+            ASSERT(moisture >= 0.0f && moisture <= 1.0f);
+            ASSERT(temperature >= 0.0f && temperature <= 1.0f);
             biome_type_id biome = EvaluateBiome(elevation, moisture, temperature);
 
             biome_stat_table[biome]++;
