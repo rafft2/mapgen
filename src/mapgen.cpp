@@ -222,123 +222,7 @@ struct tile_data
 
     u8 water_descent_direction; // TODO: should water fall towards multiple directions?
     s32 water_accumulation_count;
-
-    u8 is_water;
-    u8 is_coastal;
 };
-
-void GenerateAndAssignPlates(tile_data *map_tile_grid, s32 map_width, s32 map_height, plate_data *plates, s32 plate_count, s32 seed)
-{
-    f32 noise_scale = 16.0f / (f32)(map_width);
-    for(s32 i = 0; i < plate_count; i++)
-    {
-        vec2i center = { RandomInt(4, map_width - 4), RandomInt(4, map_height - 4) };
-        s32 roll = RandomInt(1, 8);
-        u8 crust_type = roll == 8 ? CRUST_TYPE_CONTINENTAL : CRUST_TYPE_OCEANIC;
-
-        f32 nx = (f32)center.x * noise_scale;
-        f32 ny = (f32)center.y * noise_scale;
-
-        f32 elevation_offset = crust_type == CRUST_TYPE_OCEANIC ? 0.15f : 0.55f;
-        f32 base_elevation = elevation_offset + (SampleWarpedFBM(nx, ny, seed) / 2.0f);
-
-        // TODO: offset moisture based on adjacent plates
-        //       more oceanic adjacent plates = higher base moisture and viceversa.
-        //       Should probably split center and crust type assignment and noise generation.
-        f32 base_moisture = SampleWarpedFBM(nx + 17.51f, ny + 31.82f, seed);
-
-        f32 equator = (f32)(map_height - 1) / 2.0f;
-        f32 distance_from_equator = fabsf((f32)center.y - equator) / equator; // [0, 1]
-        f32 temperature_offset = (1.0f - distance_from_equator) / 2.0f; // [0, 0.5]
-        f32 base_temperature = temperature_offset + (SampleWarpedFBM(nx + 7.34f, ny + 3.227f, seed) / 2.0f);
-
-        plates[i].center = center;
-        plates[i].crust_type = crust_type;
-        plates[i].base_elevation = base_elevation;
-        plates[i].base_moisture = base_moisture;
-        plates[i].base_temperature = base_temperature;
-    }
-    
-    for(s32 x = 0; x < map_width; x++)
-    {
-        for(s32 y = 0; y < map_height; y++)
-        {
-            s32 closest_dist[3] = {INT_MAX, INT_MAX, INT_MAX};
-            u32 closest_plates[3] = {0, 1, 2};
-            for(s32 i = 0; i < plate_count; i++)
-            {
-                s32 distance = ComputeDistanceInTiles(x, y, plates[i].center);
-                s32 j = 2;
-                while(j >= 0 && distance < closest_dist[j])
-                {
-                    j--;
-                }
-                j++;
-                if(j <= 2 && distance < closest_dist[j])
-                {
-                    closest_dist[j] = distance;
-                    closest_plates[j] = (u32)i;
-                }
-            }
-            map_tile_grid[IDX2D(x, y, map_width)].plate_index[0] = closest_plates[0];
-            map_tile_grid[IDX2D(x, y, map_width)].plate_index[1] = closest_plates[1];
-            map_tile_grid[IDX2D(x, y, map_width)].plate_index[2] = closest_plates[2];
-            
-        }
-    }
-}
-
-void GenerateTiles(tile_data *map_tile_grid, s32 map_width, s32 map_height, plate_data *plates, s32 seed)
-{
-    f32 noise_scale = 16.0f / (f32)(map_width);
-    for(s32 x = 0; x < map_width; x++)
-    {
-        for(s32 y = 0; y < map_height; y++)
-        {
-            f32 nx = (f32)x * noise_scale;
-            f32 ny = (f32)y * noise_scale;
-            
-            u32 *closest_plates = &map_tile_grid[IDX2D(x, y, map_width)].plate_index[0];
-            plate_data plate0 = plates[closest_plates[0]];
-            plate_data plate1 = plates[closest_plates[1]];
-            plate_data plate2 = plates[closest_plates[2]];
-            vec2i center0 = plate0.center;
-            vec2i center1 = plate1.center;
-            vec2i center2 = plate2.center;
-            s32 distance0 = ComputeDistanceInTiles(x, y, center0);
-            s32 distance1 = ComputeDistanceInTiles(x, y, center1);
-            s32 distance2 = ComputeDistanceInTiles(x, y, center2);
-            f32 w0 = 1.0f / ((f32)(distance0 * distance0) + EPSILON32);
-            f32 w1 = 1.0f / ((f32)(distance1 * distance1) + EPSILON32);
-            f32 w2 = 1.0f / ((f32)(distance2 * distance2) + EPSILON32);
-            f32 total_weight = w0 + w1 + w2;
-            w0 /= total_weight;
-            w1 /= total_weight;
-            w2 /= total_weight;
-
-            f32 blended_base_elevation = w0 * plate0.base_elevation +
-                                         w1 * plate1.base_elevation +
-                                         w2 * plate2.base_elevation;
-            
-            f32 blended_base_moisture =  w0 * plate0.base_moisture +
-                                         w1 * plate1.base_moisture +
-                                         w2 * plate2.base_moisture;
-
-            f32 blended_base_temperature = w0 * plate0.base_temperature +
-                                           w1 * plate1.base_temperature +
-                                           w2 * plate2.base_temperature;
-
-            f32 elevation = blended_base_elevation * 0.65f + SampleWarpedFBM(nx + 1.11f, ny + 2.788f, seed) * 0.35f;
-            f32 moisture = blended_base_moisture * 0.5f + SampleWarpedFBM(nx + 5.56f, ny + 1.31f, seed) * 0.5f;
-            f32 temperature = blended_base_temperature * 0.75f + SampleWarpedFBM(nx + 3.422f, ny + 13.2f, seed) * 0.25f;
-
-            map_tile_grid[IDX2D(x, y, map_width)].elevation = elevation;
-            map_tile_grid[IDX2D(x, y, map_width)].moisture = moisture;
-            map_tile_grid[IDX2D(x, y, map_width)].temperature = temperature;
-        }
-    }
-
-}
 
 void GeneratePlatesAndAssignBaseElevationToTiles(tile_data *map_tile_grid, s32 map_width, s32 map_height, plate_data *plates, s32 plate_count)
 {
@@ -419,6 +303,32 @@ void GeneratePlatesAndAssignBaseElevationToTiles(tile_data *map_tile_grid, s32 m
     }
 }
 
+void GenerateNoiseMap(tile_data *map_tile_grid, s32 map_width, s32 map_height, s32 seed)
+{
+    f32 noise_scale = 8.0f / (f32)(map_width);
+    for(s32 x = 0; x < map_width; x++)
+    {
+        for(s32 y = 0; y < map_height; y++)
+        {
+            f32 nx = (f32)x * noise_scale;
+            f32 ny = (f32)y * noise_scale;
+            map_tile_grid[IDX2D(x, y, map_width)].elevation += SampleWarpedFBM(nx + 1.11f, ny + 2.788f, seed) * 0.5f;
+           
+            // TODO: offset moisture based on adjacent plates
+            //       more oceanic adjacent plates = higher base moisture and viceversa.
+            //       Should probably split center and crust type assignment and noise generation.    
+            map_tile_grid[IDX2D(x, y, map_width)].moisture = SampleWarpedFBM(nx + 5.56f, ny + 1.31f, seed);
+
+            f32 temp_offset_elevation = 1.0f - map_tile_grid[IDX2D(x, y, map_width)].elevation;
+            f32 equator = (f32)(map_height - 1) / 2.0f;
+            f32 distance_from_equator = fabsf((f32)y - equator) / equator; // [0, 1]
+            f32 temp_offset_latitude = powf(1.0f - distance_from_equator, 2);
+            map_tile_grid[IDX2D(x, y, map_width)].temperature = SampleWarpedFBM(nx + 3.422f, ny + 13.2f, seed) * 0.2f + temp_offset_elevation * 0.2f + temp_offset_latitude * 0.6f;
+        }
+    }
+
+}
+
 int main(void)
 {
     s32 seed = (s32)time(NULL);
@@ -431,21 +341,28 @@ int main(void)
     plate_data *plates = (plate_data*)malloc(sizeof(plate_data) * plate_count);
 
     GeneratePlatesAndAssignBaseElevationToTiles(map_tile_grid, map_width, map_height, plates, plate_count);
+    GenerateNoiseMap(map_tile_grid, map_width, map_height, seed);
 
     u8* plates_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
     u8* elevation_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
+    u8* moisture_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
+    u8* temperature_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
     for(s32 x = 0; x < map_width; x++)
     {
         for(s32 y = 0; y < map_height; y++)
         {
             u32 plate_index = map_tile_grid[IDX2D(x, y, map_width)].closest_plate_index;
             plates_map[IDX2D(x, y, map_width)] = plates[plate_index].crust_type == CRUST_TYPE_OCEANIC ? 0u : 255u;
-
             elevation_map[IDX2D(x, y, map_width)] = (u8)(map_tile_grid[IDX2D(x, y, map_width)].elevation * 255.0f);
+            moisture_map[IDX2D(x, y, map_width)] = (u8)(map_tile_grid[IDX2D(x, y, map_width)].moisture * 255.0f);
+            temperature_map[IDX2D(x, y, map_width)] = (u8)(map_tile_grid[IDX2D(x, y, map_width)].temperature * 255.0f);
         }
     }
     ASSERT(stbi_write_png("output/plates.png", map_width, map_height, 1, plates_map, 1 * map_width));
     ASSERT(stbi_write_png("output/elevation.png", map_width, map_height, 1, elevation_map, 1 * map_width));
+    ASSERT(stbi_write_png("output/moisture.png", map_width, map_height, 1, moisture_map, 1 * map_width));
+    ASSERT(stbi_write_png("output/temperature.png", map_width, map_height, 1, temperature_map, 1 * map_width));
+
     
 
 #if 0
@@ -539,8 +456,6 @@ int main(void)
         }
     }
 
-    u8* moisture_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
-    u8* temperature_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
     u8* accumulation_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
     s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
     color_rgb* output_image = (color_rgb*)malloc(sizeof(color_rgb) * map_width * map_height);
@@ -589,8 +504,6 @@ int main(void)
     }
 
     ASSERT(stbi_write_png("output/map.png", map_width, map_height, 3, (u8*)output_image, 3 * map_width));
-    ASSERT(stbi_write_png("output/moisture.png", map_width, map_height, 1, moisture_map, 1 * map_width));
-    ASSERT(stbi_write_png("output/temperature.png", map_width, map_height, 1, temperature_map, 1 * map_width));
     ASSERT(stbi_write_png("output/accumulation.png", map_width, map_height, 1, accumulation_map, 1 * map_width));
 
     printf("\n========= MAP RESULTS =========\n");
