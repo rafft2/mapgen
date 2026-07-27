@@ -6,3 +6,6 @@
 
 ## Warped noise
 ![](images/map3.png)
+
+## Plates and Rivers
+![](images/map4.png)
