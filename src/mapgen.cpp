@@ -203,9 +203,9 @@ vec2i adjacent_tile_from_direction[DIRECTION_COUNT] = { {0, 0}, {0, -1}, {-1, -1
 
 struct plate_data
 {
-    vec2i center;
+    vec2i center; 
     u8 crust_type;
- 
+    
     f32 base_elevation;
     f32 base_moisture;
     f32 base_temperature;
@@ -214,6 +214,7 @@ struct plate_data
 struct tile_data
 {    
     u32 plate_index[3]; // Closest 3 plates for blending
+    u32 closest_plate_index;
 
     f32 elevation;
     f32 moisture;
@@ -222,6 +223,8 @@ struct tile_data
     u8 water_descent_direction; // TODO: should water fall towards multiple directions?
     s32 water_accumulation_count;
 
+    u8 is_water;
+    u8 is_coastal;
 };
 
 void GenerateAndAssignPlates(tile_data *map_tile_grid, s32 map_width, s32 map_height, plate_data *plates, s32 plate_count, s32 seed)
@@ -292,10 +295,6 @@ void GenerateTiles(tile_data *map_tile_grid, s32 map_width, s32 map_height, plat
     {
         for(s32 y = 0; y < map_height; y++)
         {
-            if(x == 200 && y == 250)
-            {
-                s32 s = 29392;
-            }
             f32 nx = (f32)x * noise_scale;
             f32 ny = (f32)y * noise_scale;
             
@@ -338,6 +337,86 @@ void GenerateTiles(tile_data *map_tile_grid, s32 map_width, s32 map_height, plat
             map_tile_grid[IDX2D(x, y, map_width)].temperature = temperature;
         }
     }
+
+}
+
+void GeneratePlatesAndAssignBaseElevationToTiles(tile_data *map_tile_grid, s32 map_width, s32 map_height, plate_data *plates, s32 plate_count)
+{
+    for(s32 i = 0; i < plate_count; i++)
+    {
+        plates[i].center = { RandomInt(4, map_width - 4), RandomInt(4, map_height - 4) };
+        
+        s32 roll = RandomInt(0, 1);
+        u8 crust_type = roll == 1 ? CRUST_TYPE_CONTINENTAL : CRUST_TYPE_OCEANIC;
+        plates[i].crust_type = crust_type;
+        
+        plates[i].base_elevation = crust_type == CRUST_TYPE_OCEANIC ? 0.15f : 0.5f;
+    }
+
+    for(s32 x = 0; x < map_width; x++)
+    {
+        for(s32 y = 0; y < map_height; y++)
+        {
+            s32 closest_dist[3] = {INT_MAX, INT_MAX, INT_MAX};
+            u32 closest_plates[3] = {0, 1, 2};
+            for(s32 i = 0; i < plate_count; i++)
+            {
+                s32 distance = ComputeDistanceInTiles(x, y, plates[i].center);
+                
+                // TODO: there's probably a better way to do this
+                s32 j = 2;
+                while(j >= 0 && distance < closest_dist[j])
+                {
+                    j--;
+                }
+                j++;
+                if(j == 2)
+                {
+                    closest_dist[j] = distance;
+                    closest_plates[j] = (u32)i;
+                }
+                else if(j == 1)
+                {
+                    s32 tmp_dist = closest_dist[1];
+                    u32 tmp_index = closest_plates[1];
+                    closest_dist[1] = distance;
+                    closest_plates[1] = (u32)i;
+                    closest_dist[2] = tmp_dist;
+                    closest_plates[2] = tmp_index;
+                }
+                else if(j == 0)
+                {
+                    s32 tmp_dist0 = closest_dist[0];
+                    u32 tmp_index0 = closest_plates[0];
+                    s32 tmp_dist1 = closest_dist[1];
+                    u32 tmp_index1 = closest_plates[1];
+                    closest_dist[0] = distance;
+                    closest_plates[0] = (u32)i;
+                    closest_dist[1] = tmp_dist0;
+                    closest_plates[1] = tmp_index0;
+                    closest_dist[2] = tmp_dist1;
+                    closest_plates[2] = tmp_index1;
+                }
+            }
+            map_tile_grid[IDX2D(x, y, map_width)].closest_plate_index = closest_plates[0];
+
+            plate_data plate0 = plates[closest_plates[0]];
+            plate_data plate1 = plates[closest_plates[1]];
+            plate_data plate2 = plates[closest_plates[2]];
+            s32 distance0 = ComputeDistanceInTiles(x, y, plate0.center);
+            s32 distance1 = ComputeDistanceInTiles(x, y, plate1.center);
+            s32 distance2 = ComputeDistanceInTiles(x, y, plate2.center);
+            f32 w0 = 1.0f / ((f32)(distance0 * distance0)*PI32 + EPSILON32);
+            f32 w1 = 1.0f / ((f32)(distance1 * distance1)*PI32 + EPSILON32);
+            f32 w2 = 1.0f / ((f32)(distance2 * distance2)*PI32 + EPSILON32);
+            f32 total_weight = w0 + w1 + w2;
+            w0 /= total_weight;
+            w1 /= total_weight;
+            w2 /= total_weight;
+            f32 elevation = w0 * plate0.base_elevation + w1 * plate1.base_elevation + w2 * plate2.base_elevation;
+            map_tile_grid[IDX2D(x, y, map_width)].elevation = elevation;
+        }
+    }
 }
 
 int main(void)
@@ -348,8 +427,28 @@ int main(void)
     s32 map_width = 1024; s32 map_height = 512;
     tile_data* map_tile_grid = (tile_data*)calloc((u32)(map_width * map_height), sizeof(tile_data));
     
-    s32 plate_count = 256;
+    s32 plate_count = 150;
     plate_data *plates = (plate_data*)malloc(sizeof(plate_data) * plate_count);
+
+    GeneratePlatesAndAssignBaseElevationToTiles(map_tile_grid, map_width, map_height, plates, plate_count);
+
+    u8* plates_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
+    u8* elevation_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
+    for(s32 x = 0; x < map_width; x++)
+    {
+        for(s32 y = 0; y < map_height; y++)
+        {
+            u32 plate_index = map_tile_grid[IDX2D(x, y, map_width)].closest_plate_index;
+            plates_map[IDX2D(x, y, map_width)] = plates[plate_index].crust_type == CRUST_TYPE_OCEANIC ? 0u : 255u;
+
+            elevation_map[IDX2D(x, y, map_width)] = (u8)(map_tile_grid[IDX2D(x, y, map_width)].elevation * 255.0f);
+        }
+    }
+    ASSERT(stbi_write_png("output/plates.png", map_width, map_height, 1, plates_map, 1 * map_width));
+    ASSERT(stbi_write_png("output/elevation.png", map_width, map_height, 1, elevation_map, 1 * map_width));
+    
+
+#if 0
     GenerateAndAssignPlates(map_tile_grid, map_width, map_height, plates, plate_count, seed);
     GenerateTiles(map_tile_grid, map_width, map_height, plates, seed);
 
@@ -440,8 +539,6 @@ int main(void)
         }
     }
 
-    u8* plates_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
-    u8* elevation_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
     u8* moisture_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
     u8* temperature_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
     u8* accumulation_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
@@ -492,12 +589,10 @@ int main(void)
     }
 
     ASSERT(stbi_write_png("output/map.png", map_width, map_height, 3, (u8*)output_image, 3 * map_width));
-    ASSERT(stbi_write_png("output/plates.png", map_width, map_height, 1, plates_map, 1 * map_width));
-    ASSERT(stbi_write_png("output/elevation.png", map_width, map_height, 1, elevation_map, 1 * map_width));
     ASSERT(stbi_write_png("output/moisture.png", map_width, map_height, 1, moisture_map, 1 * map_width));
     ASSERT(stbi_write_png("output/temperature.png", map_width, map_height, 1, temperature_map, 1 * map_width));
     ASSERT(stbi_write_png("output/accumulation.png", map_width, map_height, 1, accumulation_map, 1 * map_width));
-    
+
     printf("\n========= MAP RESULTS =========\n");
     printf("Seed: %d.\n", seed);
     for(s32 i = 0; i < BIOME_TYPE_COUNT; i++)
@@ -506,6 +601,7 @@ int main(void)
         PrintLineEveryN(i, 3);
     }
     printf("\n========= STATS =========\n");
+    #endif
 
     return(0);
 }
