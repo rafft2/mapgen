@@ -57,9 +57,9 @@ color_rgb COLOR_LIGHT_BLUE = ColorRGB(100, 100, 255);
 color_rgb COLOR_AQUA = ColorRGB(0, 160, 180);
 color_rgb COLOR_LIGHT_AQUA = ColorRGB(20, 180, 200);
 color_rgb COLOR_DARK_GREEN = ColorRGB(0, 127, 0);
-color_rgb COLOR_GREEN = ColorRGB(0, 255, 0);
+color_rgb COLOR_GREEN = ColorRGB(20, 255, 20);
 color_rgb COLOR_MUSTARD_GREEN = ColorRGB(110, 110, 48);
-color_rgb COLOR_YELLOW = ColorRGB(255, 255, 0);
+color_rgb COLOR_YELLOW = ColorRGB(255, 255, 100);
 color_rgb COLOR_PURPLE = ColorRGB(127, 0, 127);
 color_rgb COLOR_DARK_GREY = ColorRGB(50, 40, 30);
 color_rgb COLOR_GREY = ColorRGB(127, 127, 127);
@@ -68,7 +68,8 @@ color_rgb COLOR_BROWN = ColorRGB(120, 65, 65);
 color_rgb biome_color_table[BIOME_TYPE_COUNT] = { COLOR_BLACK, COLOR_VERY_DARK_BLUE, COLOR_DARK_BLUE, COLOR_BLUE,
                                                   COLOR_GREY, COLOR_GREEN, COLOR_YELLOW, COLOR_MUSTARD_GREEN,
                                                   COLOR_PURPLE, COLOR_DARK_GREEN, COLOR_LIGHT_BLUE, COLOR_DARK_GREY,
-                                                  COLOR_ORANGE, COLOR_WHITE, COLOR_AQUA, COLOR_BROWN, COLOR_LIGHT_AQUA };
+                                                  COLOR_ORANGE, COLOR_WHITE, COLOR_AQUA, COLOR_BROWN,
+                                                  COLOR_LIGHT_AQUA };
 char *biome_name_table[BIOME_TYPE_COUNT] = { "The void", "Deep Ocean", "Ocean", "Shallow Ocean", "Mountain", "Plain", "Desert", "Jungle", "Marsh",
                                              "Forest", "Tundra", "Highlands", "Savannah", "Snow", "Rainforest", "Taiga", "Ice" };
 
@@ -77,9 +78,16 @@ biome_type_id EvaluateBiome(f32 elevation, f32 moisture, f32 temperature)
     if(elevation < 0.35f) { return(BIOME_TYPE_DEEP_OCEAN); }
     if(elevation < 0.475f) { return(BIOME_TYPE_OCEAN); }
     if(elevation < 0.5f) { return(BIOME_TYPE_SHALLOW_OCEAN); }
-    if(elevation > 0.9f || temperature <= 0.05f) { return(BIOME_TYPE_SNOW); }
-    if(elevation > 0.75f) { return(BIOME_TYPE_MOUNTAIN); }
-    if(elevation > 0.6f && temperature > 0.7f) { return(BIOME_TYPE_HIGHLAND); }
+    if(elevation > 0.8f || temperature <= 0.25f)
+    {
+        if(moisture > 0.45f) return(BIOME_TYPE_SNOW);
+        else return(BIOME_TYPE_ICE);
+    }
+    if(elevation > 0.75f)
+    {
+        if(temperature > 0.7f) return(BIOME_TYPE_HIGHLAND);
+        else return(BIOME_TYPE_MOUNTAIN);
+    }
 
     if(temperature >= 0.65f)
     {
@@ -87,16 +95,16 @@ biome_type_id EvaluateBiome(f32 elevation, f32 moisture, f32 temperature)
         else if(moisture >= 0.4f) { return(BIOME_TYPE_SAVANNAH); }
         else { return(BIOME_TYPE_DESERT); }
     }
-    else if(temperature >= 0.4f)
+    else if(temperature >= 0.45f)
     {
-        if(moisture >= 0.6f) { return(BIOME_TYPE_RAINFOREST); }
-        else if(moisture >= 0.4f) { return(BIOME_TYPE_FOREST); }
+        if(moisture >= 0.65f) { return(BIOME_TYPE_RAINFOREST); }
+        else if(moisture >= 0.45f) { return(BIOME_TYPE_FOREST); }
         else { return(BIOME_TYPE_PLAIN); }
     }
     else
     {
-        if(moisture >= 0.6f) { return(BIOME_TYPE_MARSH); }
-        else if(moisture >= 0.4f) { return(BIOME_TYPE_TAIGA); }
+        if(moisture >= 0.65f) { return(BIOME_TYPE_MARSH); }
+        else if(moisture >= 0.45f) { return(BIOME_TYPE_TAIGA); }
         else { return(BIOME_TYPE_TUNDRA); }
     }
 
@@ -278,27 +286,28 @@ void GeneratePlatesAndAssignBaseElevationToTiles(tile_data *map_tile_grid, s32 m
 
 void GenerateNoiseMap(tile_data *map_tile_grid, s32 map_width, s32 map_height, s32 seed)
 {
-    f32 noise_scale = 4.0f / (f32)(map_width);
+    f32 noise_scale_large = GetNoiseScaleForLargeDetails(map_width, map_height);
+    f32 noise_scale_medium = GetNoiseScaleForMediumDetails(map_width, map_height);
     for(s32 x = 0; x < map_width; x++)
     {
         for(s32 y = 0; y < map_height; y++)
         {
-            f32 nx = (f32)x * noise_scale;
-            f32 ny = (f32)y * noise_scale;
+            f32 nx = (f32)x * noise_scale_large;
+            f32 ny = (f32)y * noise_scale_large;
             
-            map_tile_grid[IDX2D(x, y, map_width)].elevation += SampleWarpedFBM(nx + 1.11f, ny + 2.788f, seed) * 0.7f;
+            map_tile_grid[IDX2D(x, y, map_width)].elevation += SampleWarpedFBM(nx, ny, seed) * 0.7f;
            
             f32 temp_offset_elevation = 1.0f - map_tile_grid[IDX2D(x, y, map_width)].elevation;
             f32 equator = (f32)(map_height - 1) / 2.0f;
             f32 distance_from_equator = fabsf((f32)y - equator) / equator; // [0, 1]
             f32 temp_offset_latitude = 1.0f - distance_from_equator;
-            map_tile_grid[IDX2D(x, y, map_width)].temperature = SampleWarpedFBM(nx + 3.422f, ny + 13.2f, seed) * 0.35f + temp_offset_elevation * 0.15f + temp_offset_latitude * 0.5f;
-        
-            nx *= 4.0f;
-            ny *= 4.0f;
+            map_tile_grid[IDX2D(x, y, map_width)].temperature = SampleWarpedFBM(nx + PHI32, ny + PHI32, seed) * 0.3f + temp_offset_elevation * 0.2f + temp_offset_latitude * 0.5f;
+
+            nx = (f32)x * noise_scale_medium;
+            ny = (f32)y * noise_scale_medium;
             // TODO: offset moisture based on adjacent plates
             //       more oceanic adjacent plates = higher base moisture and viceversa..
-            map_tile_grid[IDX2D(x, y, map_width)].moisture = SampleWarpedFBM(nx + 5.56f, ny + 1.31f, seed);
+            map_tile_grid[IDX2D(x, y, map_width)].moisture = SampleWarpedFBM(nx - PHI32, ny - PHI32, seed);
         }
     }
 }
@@ -309,8 +318,8 @@ void GenerateRiverFlows(tile_data *map_tile_grid, s32 map_width, s32 map_height)
     {
         for(s32 y = 0; y < map_height; y++)
         {
-            // TODO: do not flow river in oceans
             f32 elev = map_tile_grid[IDX2D(x, y, map_width)].elevation;
+            if(elev < 0.5f) { continue; }
             u8 steepest_dir = DIRECTION_NONE;
             f32 max_diff = 0.0f;
             for(u8 dir = 0; dir < DIRECTION_COUNT; dir++)
@@ -355,7 +364,7 @@ void GenerateRiverFlows(tile_data *map_tile_grid, s32 map_width, s32 map_height)
         {
             s32 accumulation = map_tile_grid[IDX2D(x, y, map_width)].water_accumulation_count;
             if(accumulation > 1000) { map_tile_grid[IDX2D(x, y, map_width)].river_type = TILE_HAS_MAJOR_RIVER; }
-            else if(accumulation > 500) { map_tile_grid[IDX2D(x, y, map_width)].river_type = TILE_HAS_STREAM; }
+            else if(accumulation > 400) { map_tile_grid[IDX2D(x, y, map_width)].river_type = TILE_HAS_STREAM; }
             else if(accumulation > 100) { map_tile_grid[IDX2D(x, y, map_width)].river_type = TILE_HAS_CREEK; }
             else { map_tile_grid[IDX2D(x, y, map_width)].river_type = TILE_HAS_NO_RIVER; }
         }
@@ -403,38 +412,22 @@ int main(void)
     {
         for(s32 y = 0; y < map_height; y++)
         {
-            f32 elevation = map_tile_grid[IDX2D(x, y, map_width)].elevation;
-            f32 moisture = map_tile_grid[IDX2D(x, y, map_width)].moisture;
-            f32 temperature = map_tile_grid[IDX2D(x, y, map_width)].temperature;
-            ASSERT(elevation >= 0.0f && elevation <= 1.0f);
-            ASSERT(moisture >= 0.0f && moisture <= 1.0f);
-            ASSERT(temperature >= 0.0f && temperature <= 1.0f);
+            f32 elevation = Clampf(map_tile_grid[IDX2D(x, y, map_width)].elevation, 0.0f, 1.0f);
+            f32 moisture = Clampf(map_tile_grid[IDX2D(x, y, map_width)].moisture, 0.0f, 1.0f);
+            f32 temperature = Clampf(map_tile_grid[IDX2D(x, y, map_width)].temperature, 0.0f, 1.0f);
 
             f32 jitter_strength = 0.01f;
-            moisture = moisture * 0.99f + stb_perlin_noise3_seed((f32)x * 10.0f + 2.5f, (f32)y * 10.0f + 4.5f, (f32)seed * 0.445f + 3.71f, 0, 0, 0, seed+222) * jitter_strength;
-            temperature = temperature * 0.99f + stb_perlin_noise3_seed((f32)x * 10.0f + 2.134f, (f32)y * 10.0f + 13.14f, (f32)seed * 0.251f + 1.32f, 0, 0, 0, seed+333) * jitter_strength;
+            moisture = moisture * 0.99f + Perlin2D((f32)x, (f32)y, seed) * jitter_strength;
+            temperature = temperature * 0.99f + Perlin2D((f32)x + PHI32, (f32)y + PHI32, seed) * jitter_strength;
 
             biome_type_id biome = EvaluateBiome(elevation, moisture, temperature);
-            
+            biome_stat_table[biome]++;
             color_rgb output_color = biome_color_table[biome];
             tile_has_river_type river_type = map_tile_grid[IDX2D(x, y, map_width)].river_type; 
-            if(biome != BIOME_TYPE_SHALLOW_OCEAN && biome != BIOME_TYPE_OCEAN && biome != BIOME_TYPE_DEEP_OCEAN)
-            {
-                if(river_type == TILE_HAS_MAJOR_RIVER) { output_color = COLOR_DARK_BLUE; }
-                else if(river_type == TILE_HAS_STREAM) { output_color = COLOR_BLUE; }
-                else if(river_type == TILE_HAS_CREEK) { output_color = COLOR_BLUE_CREEK; }
-            
-                f32 equator = (f32)(map_height - 1) / 2.0f;
-                f32 distance_from_equator = fabsf((f32)y - equator) / equator;
-                if(distance_from_equator >= 0.95f)
-                {
-                    if(moisture <= 0.25f) { biome = BIOME_TYPE_ICE; }
-                    else if(moisture <= 0.5f) { biome = BIOME_TYPE_SNOW; }
-                    output_color = biome_color_table[biome];
-                }
-            }
+            if(river_type == TILE_HAS_MAJOR_RIVER) { output_color = COLOR_DARK_BLUE; }
+            else if(river_type == TILE_HAS_STREAM) { output_color = COLOR_BLUE; }
+            else if(river_type == TILE_HAS_CREEK) { output_color = COLOR_BLUE_CREEK; }
 
-            biome_stat_table[biome]++;
             output_image[IDX2D(x, y, map_width)] = output_color;
         }
     }
