@@ -24,7 +24,6 @@ enum biome_type_id : u16
     BIOME_TYPE_MARSH,
     BIOME_TYPE_FOREST,
     BIOME_TYPE_TUNDRA,
-    BIOME_TYPE_HIGHLAND,
     BIOME_TYPE_SAVANNAH,
     BIOME_TYPE_SNOW,
     BIOME_TYPE_RAINFOREST,
@@ -57,21 +56,20 @@ color_rgb COLOR_LIGHT_BLUE = ColorRGB(100, 100, 255);
 color_rgb COLOR_AQUA = ColorRGB(0, 160, 180);
 color_rgb COLOR_LIGHT_AQUA = ColorRGB(20, 180, 200);
 color_rgb COLOR_DARK_GREEN = ColorRGB(0, 127, 0);
-color_rgb COLOR_GREEN = ColorRGB(20, 255, 20);
+color_rgb COLOR_GREEN = ColorRGB(100, 220, 100);
 color_rgb COLOR_MUSTARD_GREEN = ColorRGB(110, 110, 48);
 color_rgb COLOR_YELLOW = ColorRGB(255, 255, 100);
 color_rgb COLOR_PURPLE = ColorRGB(127, 0, 127);
-color_rgb COLOR_DARK_GREY = ColorRGB(50, 40, 30);
 color_rgb COLOR_GREY = ColorRGB(127, 127, 127);
 color_rgb COLOR_ORANGE = ColorRGB(200, 160, 140);
 color_rgb COLOR_BROWN = ColorRGB(120, 65, 65);
 color_rgb biome_color_table[BIOME_TYPE_COUNT] = { COLOR_BLACK, COLOR_VERY_DARK_BLUE, COLOR_DARK_BLUE, COLOR_BLUE,
                                                   COLOR_GREY, COLOR_GREEN, COLOR_YELLOW, COLOR_MUSTARD_GREEN,
-                                                  COLOR_PURPLE, COLOR_DARK_GREEN, COLOR_LIGHT_BLUE, COLOR_DARK_GREY,
+                                                  COLOR_PURPLE, COLOR_DARK_GREEN, COLOR_LIGHT_BLUE,
                                                   COLOR_ORANGE, COLOR_WHITE, COLOR_AQUA, COLOR_BROWN,
                                                   COLOR_LIGHT_AQUA };
 char *biome_name_table[BIOME_TYPE_COUNT] = { "The void", "Deep Ocean", "Ocean", "Shallow Ocean", "Mountain", "Plain", "Desert", "Jungle", "Marsh",
-                                             "Forest", "Tundra", "Highlands", "Savannah", "Snow", "Rainforest", "Taiga", "Ice" };
+                                             "Forest", "Tundra", "Savannah", "Snow", "Rainforest", "Taiga", "Ice" };
 
 biome_type_id EvaluateBiome(f32 elevation, f32 moisture, f32 temperature)
 {
@@ -83,11 +81,7 @@ biome_type_id EvaluateBiome(f32 elevation, f32 moisture, f32 temperature)
         if(moisture > 0.45f) return(BIOME_TYPE_SNOW);
         else return(BIOME_TYPE_ICE);
     }
-    if(elevation > 0.75f)
-    {
-        if(temperature > 0.7f) return(BIOME_TYPE_HIGHLAND);
-        else return(BIOME_TYPE_MOUNTAIN);
-    }
+    if(elevation > 0.75f) { return(BIOME_TYPE_MOUNTAIN); }
 
     if(temperature >= 0.65f)
     {
@@ -95,10 +89,10 @@ biome_type_id EvaluateBiome(f32 elevation, f32 moisture, f32 temperature)
         else if(moisture >= 0.4f) { return(BIOME_TYPE_SAVANNAH); }
         else { return(BIOME_TYPE_DESERT); }
     }
-    else if(temperature >= 0.45f)
+    else if(temperature >= 0.425f)
     {
         if(moisture >= 0.65f) { return(BIOME_TYPE_RAINFOREST); }
-        else if(moisture >= 0.45f) { return(BIOME_TYPE_FOREST); }
+        else if(moisture >= 0.5f) { return(BIOME_TYPE_FOREST); }
         else { return(BIOME_TYPE_PLAIN); }
     }
     else
@@ -203,6 +197,8 @@ struct tile_data
     u8 water_descent_direction; // TODO: should water fall towards multiple directions?
     s32 water_accumulation_count;
     tile_has_river_type river_type;
+    
+    biome_type_id biome;
 };
 
 struct tile_map
@@ -387,6 +383,25 @@ void GenerateRiverFlows(tile_map map)
     }
 }
 
+void AssignBiomes(tile_map map, s32 seed)
+{
+    for(s32 x = 0; x < map.width; x++)
+    {
+        for(s32 y = 0; y < map.height; y++)
+        {
+            f32 elevation = Clampf(map.GetTile(x, y)->elevation, 0.0f, 1.0f);
+            f32 moisture = Clampf(map.GetTile(x, y)->moisture, 0.0f, 1.0f);
+            f32 temperature = Clampf(map.GetTile(x, y)->temperature, 0.0f, 1.0f);
+
+            f32 jitter_strength = 0.01f;
+            moisture = moisture * 0.99f + Perlin2D((f32)x, (f32)y, seed) * jitter_strength;
+            temperature = temperature * 0.99f + Perlin2D((f32)x + PHI32, (f32)y + PHI32, seed) * jitter_strength;
+
+            map.GetTile(x, y)->biome = EvaluateBiome(elevation, moisture, temperature);
+        }
+    }
+}
+
 tile_map CreateMap(s32 width, s32 height, s32 seed)
 {
     tile_map map = {};
@@ -399,6 +414,7 @@ tile_map CreateMap(s32 width, s32 height, s32 seed)
     GeneratePlatesAndAssignBaseElevationToTiles(map);
     GenerateNoiseMap(map, seed);
     GenerateRiverFlows(map);
+    AssignBiomes(map, seed);
     
     return(map);
 }
@@ -432,18 +448,10 @@ void OutputMap(tile_map map, s32 seed)
     {
         for(s32 y = 0; y < map.height; y++)
         {
-            f32 elevation = Clampf(map.GetTile(x, y)->elevation, 0.0f, 1.0f);
-            f32 moisture = Clampf(map.GetTile(x, y)->moisture, 0.0f, 1.0f);
-            f32 temperature = Clampf(map.GetTile(x, y)->temperature, 0.0f, 1.0f);
-
-            f32 jitter_strength = 0.01f;
-            moisture = moisture * 0.99f + Perlin2D((f32)x, (f32)y, seed) * jitter_strength;
-            temperature = temperature * 0.99f + Perlin2D((f32)x + PHI32, (f32)y + PHI32, seed) * jitter_strength;
-
-            biome_type_id biome = EvaluateBiome(elevation, moisture, temperature);
+            biome_type_id biome = map.GetTile(x, y)->biome;
             biome_stat_table[biome]++;
             color_rgb output_color = biome_color_table[biome];
-            tile_has_river_type river_type = map.GetTile(x, y)->river_type; 
+            tile_has_river_type river_type = map.GetTile(x, y)->river_type;
             if(river_type == TILE_HAS_MAJOR_RIVER) { output_color = COLOR_DARK_BLUE; }
             else if(river_type == TILE_HAS_STREAM) { output_color = COLOR_BLUE; }
             else if(river_type == TILE_HAS_CREEK) { output_color = COLOR_BLUE_CREEK; }
@@ -475,8 +483,6 @@ int main(void)
     
     s32 map_width = 1024; s32 map_height = 512;
     tile_map map = CreateMap(map_width, map_height, seed);
-    
-    // TODO: do not pass seed to the output function. Move noise jittering to CreateMap
     OutputMap(map, seed);
 
     return(0);
