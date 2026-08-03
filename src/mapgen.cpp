@@ -177,8 +177,8 @@ vec2i adjacent_tile_from_direction[DIRECTION_COUNT] = { {0, 0}, {0, -1}, {-1, -1
 
 struct plate_data
 {
-    vec2i center; 
-    u8 crust_type;   
+    vec2i center;
+    u8 crust_type;
     f32 base_elevation;
  };
 
@@ -205,28 +205,40 @@ struct tile_data
     tile_has_river_type river_type;
 };
 
-void GeneratePlatesAndAssignBaseElevationToTiles(tile_data *map_tile_grid, s32 map_width, s32 map_height, plate_data *plates, s32 plate_count)
+struct tile_map
 {
-    for(s32 i = 0; i < plate_count; i++)
+    s32 width;
+    s32 height;
+    tile_data *tiles;
+
+    plate_data *plates;
+    s32 plate_count;
+
+    tile_data *GetTile(s32 x, s32 y) { return(tiles + (y * width + x)); }
+    plate_data *GetPlate(s32 i) { return(plates + i); }
+    plate_data *GetPlate(u32 i) { return(plates + i); }
+};
+
+void GeneratePlatesAndAssignBaseElevationToTiles(tile_map map)
+{
+    for(s32 i = 0; i < map.plate_count; i++)
     {
-        plates[i].center = { RandomInt(4, map_width - 4), RandomInt(4, map_height - 4) };
-        
         s32 roll = RandomInt(1, 4);
         u8 crust_type = roll == 1 ? CRUST_TYPE_CONTINENTAL : CRUST_TYPE_OCEANIC;
-        plates[i].crust_type = crust_type;
-        
-        plates[i].base_elevation = crust_type == CRUST_TYPE_OCEANIC ? 0.05f : 0.3f;
+        map.GetPlate(i)->crust_type = crust_type;
+        map.GetPlate(i)->base_elevation = crust_type == CRUST_TYPE_OCEANIC ? 0.0f : 0.3f;
+        map.GetPlate(i)->center = { RandomInt(4, map.width - 4), RandomInt(4, map.height - 4) };
     }
 
-    for(s32 x = 0; x < map_width; x++)
+    for(s32 x = 0; x < map.width; x++)
     {
-        for(s32 y = 0; y < map_height; y++)
+        for(s32 y = 0; y < map.height; y++)
         {
             s32 closest_dist[3] = {INT_MAX, INT_MAX, INT_MAX};
             u32 closest_plates[3] = {0, 1, 2};
-            for(s32 i = 0; i < plate_count; i++)
+            for(s32 i = 0; i < map.plate_count; i++)
             {
-                s32 distance = ComputeDistanceInTiles(x, y, plates[i].center);
+                s32 distance = ComputeDistanceInTiles(x, y, map.GetPlate(i)->center);
                 
                 // TODO: there's probably a better way to do this
                 s32 j = 2;
@@ -263,11 +275,11 @@ void GeneratePlatesAndAssignBaseElevationToTiles(tile_data *map_tile_grid, s32 m
                     closest_plates[2] = tmp_index1;
                 }
             }
-            map_tile_grid[IDX2D(x, y, map_width)].closest_plate_index = closest_plates[0];
+            map.GetTile(x, y)->closest_plate_index = closest_plates[0];
 
-            plate_data plate0 = plates[closest_plates[0]];
-            plate_data plate1 = plates[closest_plates[1]];
-            plate_data plate2 = plates[closest_plates[2]];
+            plate_data plate0 = *(map.GetPlate(closest_plates[0]));
+            plate_data plate1 = *(map.GetPlate(closest_plates[1]));
+            plate_data plate2 = *(map.GetPlate(closest_plates[2]));
             s32 distance0 = ComputeDistanceInTiles(x, y, plate0.center);
             s32 distance1 = ComputeDistanceInTiles(x, y, plate1.center);
             s32 distance2 = ComputeDistanceInTiles(x, y, plate2.center);
@@ -279,56 +291,59 @@ void GeneratePlatesAndAssignBaseElevationToTiles(tile_data *map_tile_grid, s32 m
             w1 /= total_weight;
             w2 /= total_weight;
             f32 elevation = w0 * plate0.base_elevation + w1 * plate1.base_elevation + w2 * plate2.base_elevation;
-            map_tile_grid[IDX2D(x, y, map_width)].elevation = elevation;
+            map.GetTile(x, y)->elevation = elevation;
         }
     }
 }
 
-void GenerateNoiseMap(tile_data *map_tile_grid, s32 map_width, s32 map_height, s32 seed)
+void GenerateNoiseMap(tile_map map, s32 seed)
 {
-    f32 noise_scale_large = GetNoiseScaleForLargeDetails(map_width, map_height);
-    f32 noise_scale_medium = GetNoiseScaleForMediumDetails(map_width, map_height);
-    for(s32 x = 0; x < map_width; x++)
+    f32 noise_scale_large = GetNoiseScaleForLargeDetails(map.width, map.height);
+    f32 noise_scale_medium = GetNoiseScaleForMediumDetails(map.width, map.height);
+    for(s32 x = 0; x < map.width; x++)
     {
-        for(s32 y = 0; y < map_height; y++)
+        for(s32 y = 0; y < map.height; y++)
         {
             f32 nx = (f32)x * noise_scale_large;
             f32 ny = (f32)y * noise_scale_large;
             
-            map_tile_grid[IDX2D(x, y, map_width)].elevation += SampleWarpedFBM(nx, ny, seed) * 0.7f;
+            map.GetTile(x, y)->elevation += SampleWarpedFBM(nx, ny, seed) * 0.7f;
            
-            f32 temp_offset_elevation = 1.0f - map_tile_grid[IDX2D(x, y, map_width)].elevation;
-            f32 equator = (f32)(map_height - 1) / 2.0f;
+            f32 temp_offset_elevation = 1.0f - map.GetTile(x, y)->elevation;
+            f32 equator = (f32)(map.height - 1) / 2.0f;
             f32 distance_from_equator = fabsf((f32)y - equator) / equator; // [0, 1]
             f32 temp_offset_latitude = 1.0f - distance_from_equator;
-            map_tile_grid[IDX2D(x, y, map_width)].temperature = SampleWarpedFBM(nx + PHI32, ny + PHI32, seed) * 0.3f + temp_offset_elevation * 0.2f + temp_offset_latitude * 0.5f;
+            map.GetTile(x, y)->temperature = SampleWarpedFBM(nx + PHI32, ny + PHI32, seed) * 0.3f +
+                                                                    temp_offset_elevation * 0.2f +
+                                                                    temp_offset_latitude * 0.5f;
 
             nx = (f32)x * noise_scale_medium;
             ny = (f32)y * noise_scale_medium;
             // TODO: offset moisture based on adjacent plates
             //       more oceanic adjacent plates = higher base moisture and viceversa..
-            map_tile_grid[IDX2D(x, y, map_width)].moisture = SampleWarpedFBM(nx - PHI32, ny - PHI32, seed);
+            map.GetTile(x, y)->moisture = SampleWarpedFBM(nx - PHI32, ny - PHI32, seed);
         }
     }
 }
 
-void GenerateRiverFlows(tile_data *map_tile_grid, s32 map_width, s32 map_height)
+void GenerateRiverFlows(tile_map map)
 {
-    for(s32 x = 0; x < map_width; x++)
+    for(s32 x = 0; x < map.width; x++)
     {
-        for(s32 y = 0; y < map_height; y++)
+        for(s32 y = 0; y < map.height; y++)
         {
-            f32 elev = map_tile_grid[IDX2D(x, y, map_width)].elevation;
-            if(elev < 0.5f) { continue; }
+            f32 elev = map.GetTile(x, y)->elevation;
+            if(elev < 0.5f) { continue; } // NOTE: skip oceans
+
             u8 steepest_dir = DIRECTION_NONE;
             f32 max_diff = 0.0f;
             for(u8 dir = 0; dir < DIRECTION_COUNT; dir++)
             {
                 vec2i pos = {x, y};
                 vec2i p_adjacent = pos + adjacent_tile_from_direction[dir];
-                if(IN_BOUNDS2D(p_adjacent.x, p_adjacent.y, map_width, map_height))
+                if(IN_BOUNDS2D(p_adjacent.x, p_adjacent.y, map.width, map.height))
                 {
-                    f32 adj_elev = map_tile_grid[IDX2D(p_adjacent.x, p_adjacent.y, map_width)].elevation;
+                    f32 adj_elev = map.GetTile(p_adjacent.x, p_adjacent.y)->elevation;
                     f32 diff = elev - adj_elev;
                     if(diff > max_diff)
                     {
@@ -337,84 +352,89 @@ void GenerateRiverFlows(tile_data *map_tile_grid, s32 map_width, s32 map_height)
                     }
                 } 
             }
-            map_tile_grid[IDX2D(x, y, map_width)].water_descent_direction = steepest_dir;
+            map.GetTile(x, y)->water_descent_direction = steepest_dir;
         }
     }
 
-    for(s32 x = 0; x < map_width; x++)
+    for(s32 x = 0; x < map.width; x++)
     {
-        for(s32 y = 0; y < map_height; y++)
+        for(s32 y = 0; y < map.height; y++)
         {
             vec2i current_pos = { x, y };
-            u8 current_dir = map_tile_grid[IDX2D(x, y, map_width)].water_descent_direction;
+            u8 current_dir = map.GetTile(x, y)->water_descent_direction;
             while(current_dir != DIRECTION_NONE)
             { 
                 vec2i movement = adjacent_tile_from_direction[current_dir];
                 current_pos = current_pos + movement;
-                ASSERT(IN_BOUNDS2D(current_pos.x, current_pos.y, map_width, map_height));
-                map_tile_grid[IDX2D(current_pos.x, current_pos.y, map_width)].water_accumulation_count += 1;
-                current_dir = map_tile_grid[IDX2D(current_pos.x, current_pos.y, map_width)].water_descent_direction;
+                ASSERT(IN_BOUNDS2D(current_pos.x, current_pos.y, map.width, map.height));
+                
+                map.GetTile(current_pos.x, current_pos.y)->water_accumulation_count += 1;
+                current_dir = map.GetTile(current_pos.x, current_pos.y)->water_descent_direction;
             }
         }
     }
 
-    for(s32 x = 0; x < map_width; x++)
+    for(s32 x = 0; x < map.width; x++)
     {
-        for(s32 y = 0; y < map_height; y++)
+        for(s32 y = 0; y < map.height; y++)
         {
-            s32 accumulation = map_tile_grid[IDX2D(x, y, map_width)].water_accumulation_count;
-            if(accumulation > 1000) { map_tile_grid[IDX2D(x, y, map_width)].river_type = TILE_HAS_MAJOR_RIVER; }
-            else if(accumulation > 400) { map_tile_grid[IDX2D(x, y, map_width)].river_type = TILE_HAS_STREAM; }
-            else if(accumulation > 100) { map_tile_grid[IDX2D(x, y, map_width)].river_type = TILE_HAS_CREEK; }
-            else { map_tile_grid[IDX2D(x, y, map_width)].river_type = TILE_HAS_NO_RIVER; }
+            s32 accumulation = map.GetTile(x, y)->water_accumulation_count;
+            if(accumulation > 1000) { map.GetTile(x, y)->river_type = TILE_HAS_MAJOR_RIVER; }
+            else if(accumulation > 400) { map.GetTile(x, y)->river_type = TILE_HAS_STREAM; }
+            else if(accumulation > 100) { map.GetTile(x, y)->river_type = TILE_HAS_CREEK; }
+            else { map.GetTile(x, y)->river_type = TILE_HAS_NO_RIVER; }
         }
     }
 }
 
-int main(void)
+tile_map CreateMap(s32 width, s32 height, s32 seed)
 {
-    s32 seed = (s32)time(NULL);
-    srand((u32)seed);
+    tile_map map = {};
+    map.width = 1024;
+    map.height = 512;
+    map.tiles = (tile_data*)calloc((u32)(width * height), sizeof(tile_data));
+    map.plate_count = 150;
+    map.plates = (plate_data*)malloc(sizeof(plate_data) * map.plate_count);
 
-    s32 map_width = 1024; s32 map_height = 512;
-    tile_data* map_tile_grid = (tile_data*)calloc((u32)(map_width * map_height), sizeof(tile_data));
+    GeneratePlatesAndAssignBaseElevationToTiles(map);
+    GenerateNoiseMap(map, seed);
+    GenerateRiverFlows(map);
     
-    s32 plate_count = 150;
-    plate_data *plates = (plate_data*)malloc(sizeof(plate_data) * plate_count);
+    return(map);
+}
 
-    GeneratePlatesAndAssignBaseElevationToTiles(map_tile_grid, map_width, map_height, plates, plate_count);
-    GenerateNoiseMap(map_tile_grid, map_width, map_height, seed);
-    GenerateRiverFlows(map_tile_grid, map_width, map_height);
-
-    u8* plates_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
-    u8* elevation_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
-    u8* moisture_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
-    u8* temperature_map = (u8*)malloc(sizeof(u8) * map_width * map_height);
-    for(s32 x = 0; x < map_width; x++)
+void OutputMap(tile_map map, s32 seed)
+{
+    u8* plates_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
+    u8* elevation_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
+    u8* moisture_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
+    u8* temperature_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
+    for(s32 x = 0; x < map.width; x++)
     {
-        for(s32 y = 0; y < map_height; y++)
+        for(s32 y = 0; y < map.height; y++)
         {
-            u32 plate_index = map_tile_grid[IDX2D(x, y, map_width)].closest_plate_index;
-            plates_map[IDX2D(x, y, map_width)] = plates[plate_index].crust_type == CRUST_TYPE_OCEANIC ? 0u : 255u;
-            elevation_map[IDX2D(x, y, map_width)] = (u8)(map_tile_grid[IDX2D(x, y, map_width)].elevation * 255.0f);
-            moisture_map[IDX2D(x, y, map_width)] = (u8)(map_tile_grid[IDX2D(x, y, map_width)].moisture * 255.0f);
-            temperature_map[IDX2D(x, y, map_width)] = (u8)(map_tile_grid[IDX2D(x, y, map_width)].temperature * 255.0f);
+            tile_data *tile = map.GetTile(x, y);
+            u32 plate_index = tile->closest_plate_index;
+            plates_map[y * map.width + x] = map.GetPlate(plate_index)->crust_type == CRUST_TYPE_OCEANIC ? 0u : 255u;
+            elevation_map[y * map.width + x] = (u8)(tile->elevation * 255.0f);
+            moisture_map[y * map.width + x] = (u8)(tile->moisture * 255.0f);
+            temperature_map[y * map.width + x] = (u8)(tile->temperature * 255.0f);
         }
     }
-    ASSERT(stbi_write_png("output/plates.png", map_width, map_height, 1, plates_map, 1 * map_width));
-    ASSERT(stbi_write_png("output/elevation.png", map_width, map_height, 1, elevation_map, 1 * map_width));
-    ASSERT(stbi_write_png("output/moisture.png", map_width, map_height, 1, moisture_map, 1 * map_width));
-    ASSERT(stbi_write_png("output/temperature.png", map_width, map_height, 1, temperature_map, 1 * map_width));
+    ASSERT(stbi_write_png("output/plates.png", map.width, map.height, 1, plates_map, 1 * map.width));
+    ASSERT(stbi_write_png("output/elevation.png", map.width, map.height, 1, elevation_map, 1 * map.width));
+    ASSERT(stbi_write_png("output/moisture.png", map.width, map.height, 1, moisture_map, 1 * map.width));
+    ASSERT(stbi_write_png("output/temperature.png", map.width, map.height, 1, temperature_map, 1 * map.width));
 
     s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
-    color_rgb* output_image = (color_rgb*)malloc(sizeof(color_rgb) * map_width * map_height);
-    for(s32 x = 0; x < map_width; x++)
+    color_rgb* output_image = (color_rgb*)malloc(sizeof(color_rgb) * map.width * map.height);
+    for(s32 x = 0; x < map.width; x++)
     {
-        for(s32 y = 0; y < map_height; y++)
+        for(s32 y = 0; y < map.height; y++)
         {
-            f32 elevation = Clampf(map_tile_grid[IDX2D(x, y, map_width)].elevation, 0.0f, 1.0f);
-            f32 moisture = Clampf(map_tile_grid[IDX2D(x, y, map_width)].moisture, 0.0f, 1.0f);
-            f32 temperature = Clampf(map_tile_grid[IDX2D(x, y, map_width)].temperature, 0.0f, 1.0f);
+            f32 elevation = Clampf(map.GetTile(x, y)->elevation, 0.0f, 1.0f);
+            f32 moisture = Clampf(map.GetTile(x, y)->moisture, 0.0f, 1.0f);
+            f32 temperature = Clampf(map.GetTile(x, y)->temperature, 0.0f, 1.0f);
 
             f32 jitter_strength = 0.01f;
             moisture = moisture * 0.99f + Perlin2D((f32)x, (f32)y, seed) * jitter_strength;
@@ -423,24 +443,41 @@ int main(void)
             biome_type_id biome = EvaluateBiome(elevation, moisture, temperature);
             biome_stat_table[biome]++;
             color_rgb output_color = biome_color_table[biome];
-            tile_has_river_type river_type = map_tile_grid[IDX2D(x, y, map_width)].river_type; 
+            tile_has_river_type river_type = map.GetTile(x, y)->river_type; 
             if(river_type == TILE_HAS_MAJOR_RIVER) { output_color = COLOR_DARK_BLUE; }
             else if(river_type == TILE_HAS_STREAM) { output_color = COLOR_BLUE; }
             else if(river_type == TILE_HAS_CREEK) { output_color = COLOR_BLUE_CREEK; }
 
-            output_image[IDX2D(x, y, map_width)] = output_color;
+            output_image[y * map.width + x] = output_color;
         }
     }
-    ASSERT(stbi_write_png("output/map.png", map_width, map_height, 3, (u8*)output_image, 3 * map_width));
+    ASSERT(stbi_write_png("output/map.png", map.width, map.height, 3, (u8*)output_image, 3 * map.width));
     
-    printf("\n========= MAP RESULTS =========\n");
+    printf("\n========= MAP =========\n");
     printf("Seed: %d.\n", seed);
     for(s32 i = 0; i < BIOME_TYPE_COUNT; i++)
     {
-        printf("%s: %d (%.1f%%).  ", biome_name_table[i], biome_stat_table[i], (f32)biome_stat_table[i] * 100.0f / (f32)(map_width * map_height));
+        printf("%s: %d (%.1f%%).  ", biome_name_table[i], biome_stat_table[i], (f32)biome_stat_table[i] * 100.0f / (f32)(map.width * map.height));
         PrintLineEveryN(i, 3);
     }
-    printf("\n========= STATS =========\n");
+    s32 total_ocean_count = biome_stat_table[BIOME_TYPE_DEEP_OCEAN] + biome_stat_table[BIOME_TYPE_OCEAN] + biome_stat_table[BIOME_TYPE_SHALLOW_OCEAN];
+    f32 total_ocean_percentage = (f32)total_ocean_count * 100.0f / (f32)(map.width * map.height);
+    if(total_ocean_percentage > 75.0f || total_ocean_percentage < 50.0f)
+    {
+        printf("\n\nOceans too big or too small (%.1f%%), try regerating the map.\n", total_ocean_percentage);
+    }
+}
+
+int main(void)
+{
+    s32 seed = (s32)time(NULL);
+    srand((u32)seed);
+    
+    s32 map_width = 1024; s32 map_height = 512;
+    tile_map map = CreateMap(map_width, map_height, seed);
+    
+    // TODO: do not pass seed to the output function. Move noise jittering to CreateMap
+    OutputMap(map, seed);
 
     return(0);
 }
