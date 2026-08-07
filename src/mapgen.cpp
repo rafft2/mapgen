@@ -71,6 +71,13 @@ color_rgb biome_color_table[BIOME_TYPE_COUNT] = { COLOR_BLACK, COLOR_VERY_DARK_B
 char *biome_name_table[BIOME_TYPE_COUNT] = { "The void", "Deep Ocean", "Ocean", "Shallow Ocean", "Mountain", "Plain", "Desert", "Jungle", "Marsh",
                                              "Forest", "Tundra", "Savannah", "Snow", "Rainforest", "Taiga", "Ice" };
 
+f32 biome_vegetation_base_table[BIOME_TYPE_COUNT] = { 0.0f, 0.0f, 0.0f, 0.1f, 0.2f, 0.7f, 0.05f, 0.9f, 0.8f,
+                                             0.85f, 0.1f, 0.5f, 0.0f, 1.0f, 0.6f, 0.0f };
+
+f32 biome_vegetation_regen_table[BIOME_TYPE_COUNT] = { 0.0f, 0.0f, 0.0f, 0.01f, 0.02f, 0.1f, 0.01f, 0.2f, 0.2f,
+                                             0.15f, 0.02f, 0.05f, 0.0f, 0.2f, 0.1f, 0.0f };
+
+
 biome_type_id EvaluateBiome(f32 elevation, f32 moisture, f32 temperature)
 {
     if(elevation < 0.35f) { return(BIOME_TYPE_DEEP_OCEAN); }
@@ -189,16 +196,19 @@ enum tile_has_river_type : u8
 struct tile_data
 {    
     u32 closest_plate_index;
+    biome_type_id biome;
 
     f32 elevation;
     f32 moisture;
     f32 temperature;
 
-    u8 water_descent_direction; // TODO: should water fall towards multiple directions?
+    u8 water_descent_direction;
     s32 water_accumulation_count;
     tile_has_river_type river_type;
-    
-    biome_type_id biome;
+
+    f32 vegetation_density;
+    f32 vegetation_capacity;
+    f32 vegetation_regeneration_rate;
 };
 
 struct tile_map
@@ -211,6 +221,7 @@ struct tile_map
     s32 plate_count;
 
     tile_data *GetTile(s32 x, s32 y) { return(tiles + (y * width + x)); }
+    tile_data *GetTile(vec2i p) { return(tiles + (p.y * width + p.x)); }
     plate_data *GetPlate(s32 i) { return(plates + i); }
     plate_data *GetPlate(u32 i) { return(plates + i); }
 };
@@ -315,8 +326,6 @@ void GenerateNoiseMap(tile_map map, s32 seed)
 
             nx = (f32)x * noise_scale_medium;
             ny = (f32)y * noise_scale_medium;
-            // TODO: offset moisture based on adjacent plates
-            //       more oceanic adjacent plates = higher base moisture and viceversa..
             map.GetTile(x, y)->moisture = SampleWarpedFBM(nx - PHI32, ny - PHI32, seed);
         }
     }
@@ -398,6 +407,14 @@ void AssignBiomes(tile_map map, s32 seed)
             temperature = temperature * 0.99f + Perlin2D((f32)x + PHI32, (f32)y + PHI32, seed) * jitter_strength;
 
             map.GetTile(x, y)->biome = EvaluateBiome(elevation, moisture, temperature);
+
+            f32 vegetation_capacity = biome_vegetation_base_table[map.GetTile(x, y)->biome];
+            vegetation_capacity *= Clampf(moisture * 1.2f, 0.05f, 1.0f);
+            vegetation_capacity *= expf(-powf((temperature - 0.5f) / 0.25f, 2.0f));
+            if(map.GetTile(x, y)->river_type == TILE_HAS_MAJOR_RIVER) { vegetation_capacity *= 1.5f; }
+            map.GetTile(x, y)->vegetation_capacity = Clampf(vegetation_capacity, 0.0f, 1.0f);
+            map.GetTile(x, y)->vegetation_density = map.GetTile(x, y)->vegetation_capacity * 0.8f;
+            map.GetTile(x, y)->vegetation_regeneration_rate = biome_vegetation_regen_table[map.GetTile(x, y)->biome];
         }
     }
 }
@@ -405,8 +422,8 @@ void AssignBiomes(tile_map map, s32 seed)
 tile_map CreateMap(s32 width, s32 height, s32 seed)
 {
     tile_map map = {};
-    map.width = 1024;
-    map.height = 512;
+    map.width = width;
+    map.height = height;
     map.tiles = (tile_data*)calloc((u32)(width * height), sizeof(tile_data));
     map.plate_count = 150;
     map.plates = (plate_data*)malloc(sizeof(plate_data) * map.plate_count);
@@ -425,6 +442,7 @@ void OutputMap(tile_map map, s32 seed)
     u8* elevation_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     u8* moisture_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     u8* temperature_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
+    u8* vegetation_capacity_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     for(s32 x = 0; x < map.width; x++)
     {
         for(s32 y = 0; y < map.height; y++)
@@ -435,12 +453,14 @@ void OutputMap(tile_map map, s32 seed)
             elevation_map[y * map.width + x] = (u8)(tile->elevation * 255.0f);
             moisture_map[y * map.width + x] = (u8)(tile->moisture * 255.0f);
             temperature_map[y * map.width + x] = (u8)(tile->temperature * 255.0f);
+            vegetation_capacity_map[y * map.width + x] = (u8)(tile->vegetation_capacity * 255.0f);
         }
     }
     ASSERT(stbi_write_png("output/plates.png", map.width, map.height, 1, plates_map, 1 * map.width));
     ASSERT(stbi_write_png("output/elevation.png", map.width, map.height, 1, elevation_map, 1 * map.width));
     ASSERT(stbi_write_png("output/moisture.png", map.width, map.height, 1, moisture_map, 1 * map.width));
     ASSERT(stbi_write_png("output/temperature.png", map.width, map.height, 1, temperature_map, 1 * map.width));
+    ASSERT(stbi_write_png("output/vegetation_capacity.png", map.width, map.height, 1, vegetation_capacity_map, 1 * map.width));
 
     s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
     color_rgb* output_image = (color_rgb*)malloc(sizeof(color_rgb) * map.width * map.height);
@@ -470,7 +490,7 @@ void OutputMap(tile_map map, s32 seed)
     }
     s32 total_ocean_count = biome_stat_table[BIOME_TYPE_DEEP_OCEAN] + biome_stat_table[BIOME_TYPE_OCEAN] + biome_stat_table[BIOME_TYPE_SHALLOW_OCEAN];
     f32 total_ocean_percentage = (f32)total_ocean_count * 100.0f / (f32)(map.width * map.height);
-    if(total_ocean_percentage > 75.0f || total_ocean_percentage < 50.0f)
+    if(total_ocean_percentage > 80.0f || total_ocean_percentage < 55.0f)
     {
         printf("\n\nOceans too big or too small (%.1f%%), try regerating the map.\n", total_ocean_percentage);
     }
