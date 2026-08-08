@@ -436,13 +436,14 @@ tile_map CreateMap(s32 width, s32 height, s32 seed)
     return(map);
 }
 
-void OutputMap(tile_map map, s32 seed)
+void OutputMap(tile_map map, const char* filename_prefix)
 {
+    // TODO: create different snapshot files based on time (start, end, etc..)
     u8* plates_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     u8* elevation_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     u8* moisture_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     u8* temperature_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
-    u8* vegetation_capacity_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
+    u8* vegetation_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     for(s32 x = 0; x < map.width; x++)
     {
         for(s32 y = 0; y < map.height; y++)
@@ -453,14 +454,14 @@ void OutputMap(tile_map map, s32 seed)
             elevation_map[y * map.width + x] = (u8)(tile->elevation * 255.0f);
             moisture_map[y * map.width + x] = (u8)(tile->moisture * 255.0f);
             temperature_map[y * map.width + x] = (u8)(tile->temperature * 255.0f);
-            vegetation_capacity_map[y * map.width + x] = (u8)(tile->vegetation_capacity * 255.0f);
+            vegetation_map[y * map.width + x] = (u8)(tile->vegetation_density * 255.0f);
         }
     }
     ASSERT(stbi_write_png("output/plates.png", map.width, map.height, 1, plates_map, 1 * map.width));
     ASSERT(stbi_write_png("output/elevation.png", map.width, map.height, 1, elevation_map, 1 * map.width));
     ASSERT(stbi_write_png("output/moisture.png", map.width, map.height, 1, moisture_map, 1 * map.width));
     ASSERT(stbi_write_png("output/temperature.png", map.width, map.height, 1, temperature_map, 1 * map.width));
-    ASSERT(stbi_write_png("output/vegetation_capacity.png", map.width, map.height, 1, vegetation_capacity_map, 1 * map.width));
+    ASSERT(stbi_write_png("output/vegetation.png", map.width, map.height, 1, vegetation_map, 1 * map.width));
 
     s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
     color_rgb* output_image = (color_rgb*)malloc(sizeof(color_rgb) * map.width * map.height);
@@ -482,7 +483,6 @@ void OutputMap(tile_map map, s32 seed)
     ASSERT(stbi_write_png("output/map.png", map.width, map.height, 3, (u8*)output_image, 3 * map.width));
     
     printf("\n========= MAP =========\n");
-    printf("Seed: %d.\n", seed);
     for(s32 i = 0; i < BIOME_TYPE_COUNT; i++)
     {
         printf("%s: %d (%.1f%%).  ", biome_name_table[i], biome_stat_table[i], (f32)biome_stat_table[i] * 100.0f / (f32)(map.width * map.height));
@@ -496,14 +496,36 @@ void OutputMap(tile_map map, s32 seed)
     }
 }
 
+void SimulateMap(tile_map map)
+{
+    for(s32 x = 0; x < map.width; x++)
+    {
+        for(s32 y = 0; y < map.height; y++)
+        {
+            tile_data *tile = map.GetTile(x, y);
+            tile->vegetation_density += (tile->vegetation_capacity - tile->vegetation_density) * tile->vegetation_regeneration_rate; // TODO: vary based on season
+            tile->vegetation_density = Clampf(tile->vegetation_density, 0.0f, tile->vegetation_capacity);
+        }
+    }
+}
+
 int main(void)
 {
     s32 seed = (s32)time(NULL);
     srand((u32)seed);
+    printf("Seed: %d.\n", seed);
     
     s32 map_width = 1024; s32 map_height = 512;
     tile_map map = CreateMap(map_width, map_height, seed);
-    OutputMap(map, seed);
+    OutputMap(map, "start");
+    u32 total_months = 10 * 12;
+    u32 ticks_per_month = 1;
+    u32 tick_count = total_months * ticks_per_month;
+    for(u32 i = 0; i < tick_count; i++)
+    {
+        SimulateMap(map);
+    }
+    OutputMap(map, "end");
 
     return(0);
 }
