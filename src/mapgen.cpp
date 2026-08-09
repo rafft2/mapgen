@@ -213,6 +213,7 @@ struct tile_data
     tile_has_river_type river_type;
 
     u8 distance_from_water;
+    u8 distance_from_river;
 
     f32 vegetation_density;
     f32 vegetation_capacity;
@@ -220,6 +221,7 @@ struct tile_data
 
     f32 food_stock;
     u32 owner_nation_index;
+    u32 population;
 };
 
 struct tile_map
@@ -227,6 +229,8 @@ struct tile_map
     s32 width;
     s32 height;
     tile_data *tiles;
+    s32 biome_stat_table[BIOME_TYPE_COUNT];
+    f32 ocean_percentage;
 
     plate_data *plates;
     s32 plate_count;
@@ -234,6 +238,8 @@ struct tile_map
     nation_data *nations;
     s32 nation_count;
     s32 nation_capacity;
+
+    u32 total_population;
 
     tile_data *GetTile(s32 x, s32 y) { return(tiles + (y * width + x)); }
     tile_data *GetTile(vec2i p) { return(tiles + (p.y * width + p.x)); }
@@ -407,11 +413,9 @@ void GenerateRiverFlows(tile_map map)
     }
 }
 
-inline b32 HasWaterSource(tile_data *tile)
+inline b32 IsOcean(biome_type_id biome)
 {
-    if(tile->biome == BIOME_TYPE_DEEP_OCEAN || tile->biome == BIOME_TYPE_OCEAN ||
-       tile->biome == BIOME_TYPE_SHALLOW_OCEAN || tile->biome == BIOME_TYPE_MARSH ||
-       tile->river_type != TILE_HAS_NO_RIVER)
+    if(biome == BIOME_TYPE_DEEP_OCEAN || biome == BIOME_TYPE_OCEAN || biome == BIOME_TYPE_SHALLOW_OCEAN)
     {
         return(1);
     }
@@ -421,13 +425,37 @@ inline b32 HasWaterSource(tile_data *tile)
     }
 }
 
-void AssignBiomes(tile_map map, s32 seed)
+inline b32 HasRiver(tile_data *tile)
 {
-    for(s32 x = 0; x < map.width; x++)
+    if(tile->river_type != TILE_HAS_NO_RIVER)
     {
-        for(s32 y = 0; y < map.height; y++)
+        return(1);
+    }
+    else
+    {
+        return(0);
+    }
+}
+
+inline b32 HasWaterSource(tile_data *tile)
+{
+    if(IsOcean(tile->biome) || tile->river_type != TILE_HAS_NO_RIVER)
+    {
+        return(1);
+    }
+    else
+    {
+        return(0);
+    }
+}
+
+void AssignBiomes(tile_map *map, s32 seed)
+{
+    for(s32 x = 0; x < map->width; x++)
+    {
+        for(s32 y = 0; y < map->height; y++)
         {
-            tile_data *tile = map.GetTile(x, y);
+            tile_data *tile = map->GetTile(x, y);
             f32 elevation = Clampf(tile->elevation, 0.0f, 1.0f);
             f32 moisture = Clampf(tile->moisture, 0.0f, 1.0f);
             f32 temperature = Clampf(tile->temperature, 0.0f, 1.0f);
@@ -437,6 +465,7 @@ void AssignBiomes(tile_map map, s32 seed)
             temperature = temperature * 0.99f + Perlin2D((f32)x + PHI32, (f32)y + PHI32, seed) * jitter_strength;
 
             tile->biome = EvaluateBiome(elevation, moisture, temperature);
+            map->biome_stat_table[tile->biome]++;
 
             f32 vegetation_capacity = biome_vegetation_base_table[tile->biome];
             vegetation_capacity *= Clampf(moisture * 1.2f, 0.05f, 1.0f);
@@ -448,15 +477,18 @@ void AssignBiomes(tile_map map, s32 seed)
 
             if(HasWaterSource(tile)) { tile->distance_from_water = 0; }
             else { tile->distance_from_water = 255u; }
+
+            if(HasRiver(tile)) { tile->distance_from_river = 0; }
+            else { tile->distance_from_river = 255u; }
         }
     }
     for(u8 radius = 0; radius < 32; radius++)
     {
-        for(s32 x = 1; x < map.width - 1; x++)
+        for(s32 x = 1; x < map->width - 1; x++)
         {
-            for(s32 y = 1; y < map.height - 1; y++)
+            for(s32 y = 1; y < map->height - 1; y++)
             {
-                tile_data *tile = map.GetTile(x, y);
+                tile_data *tile = map->GetTile(x, y);
                 if(tile->distance_from_water == radius)
                 {
                     for(s32 dx = -1; dx <= 1; dx++)
@@ -464,23 +496,54 @@ void AssignBiomes(tile_map map, s32 seed)
                         for(s32 dy = -1; dy <= 1; dy++)
                         {
                             vec2i other_tile = { x + dx, y + dy };
-                            ASSERT(IN_BOUNDS2D(other_tile.x, other_tile.y, map.width, map.height));
-                            map.GetTile(other_tile)->distance_from_water = MIN(map.GetTile(other_tile)->distance_from_water, radius + 1u);
+                            ASSERT(IN_BOUNDS2D(other_tile.x, other_tile.y, map->width, map->height));
+                            map->GetTile(other_tile)->distance_from_water = MIN(map->GetTile(other_tile)->distance_from_water, radius + 1u);
                         }
                     }
                 }
+                if(tile->distance_from_river == radius)
+                {
+                    for(s32 dx = -1; dx <= 1; dx++)
+                    {
+                        for(s32 dy = -1; dy <= 1; dy++)
+                        {
+                            vec2i other_tile = { x + dx, y + dy };
+                            ASSERT(IN_BOUNDS2D(other_tile.x, other_tile.y, map->width, map->height));
+                            map->GetTile(other_tile)->distance_from_river = MIN(map->GetTile(other_tile)->distance_from_river, radius + 1u);
+                        }
+                    }
+                }
+                
             }
         }
     }
+    s32 total_ocean_count = map->biome_stat_table[BIOME_TYPE_DEEP_OCEAN] + map->biome_stat_table[BIOME_TYPE_OCEAN] + map->biome_stat_table[BIOME_TYPE_SHALLOW_OCEAN];
+    f32 total_ocean_percentage = (f32)total_ocean_count / (f32)(map->width * map->height);
+    if(total_ocean_percentage > 0.8f || total_ocean_percentage < 0.55f)
+    {
+        printf("\n\nOceans too big or too small (%.1f%%), try regerating the map.\n", total_ocean_percentage);
+    }
+    map->ocean_percentage = total_ocean_percentage;
 }
 
-void SpawnSettelements(tile_map map)
+void SpawnSettelements(tile_map *map)
 {
-    for(s32 x = 0; x < map.width; x++)
+    for(s32 x = 0; x < map->width; x++)
     {
-        for(s32 y = 0; y < map.height; y++)
+        for(s32 y = 0; y < map->height; y++)
         {
-            tile_data *tile = map.GetTile(x, y);
+            tile_data *tile = map->GetTile(x, y);
+            if(IsOcean(tile->biome) || tile->biome == BIOME_TYPE_ICE || tile->biome == BIOME_TYPE_SNOW) { continue; }
+            if(tile->temperature <= 0.3f || tile->temperature >= 0.7f) { continue; }
+            if(tile->moisture <= 0.3f) { continue; }
+            
+            f32 multiplier = 2.0f / (f32)(tile->distance_from_river + 1);
+            multiplier += 1.0f / (f32)(tile->distance_from_water*tile->distance_from_water + 1);
+            if(tile->biome == BIOME_TYPE_PLAIN || tile->biome == BIOME_TYPE_FOREST || tile->biome == BIOME_TYPE_RAINFOREST) { multiplier += 1.0f; }
+            multiplier += tile->vegetation_density / 2.0f;
+            
+            tile->population = (u32)(multiplier * 120.0f);
+            map->total_population += tile->population;
         }
     }
 }
@@ -491,17 +554,19 @@ tile_map CreateMap(s32 width, s32 height, s32 seed)
     map.width = width;
     map.height = height;
     map.tiles = (tile_data*)calloc((u32)(width * height), sizeof(tile_data));
+    memset(&map.biome_stat_table, 0, sizeof(map.biome_stat_table));
     map.plate_count = 150;
     map.plates = (plate_data*)malloc(sizeof(plate_data) * map.plate_count);
     map.nation_capacity = 256;
     map.nation_count = 0;
     map.nations = (nation_data*)malloc(sizeof(nation_data) * map.nation_capacity);
+    map.total_population = 0u;
 
     GeneratePlatesAndAssignBaseElevationToTiles(map);
     GenerateNoiseMap(map, seed);
     GenerateRiverFlows(map);
-    AssignBiomes(map, seed);
-    SpawnSettelements(map);
+    AssignBiomes(&map, seed);
+    SpawnSettelements(&map);
     
     return(map);
 }
@@ -515,6 +580,7 @@ void OutputMap(tile_map map, const char* filename_prefix)
     u8* temperature_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     u8* vegetation_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     u8* water_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
+    u8* population_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     for(s32 x = 0; x < map.width; x++)
     {
         for(s32 y = 0; y < map.height; y++)
@@ -527,6 +593,7 @@ void OutputMap(tile_map map, const char* filename_prefix)
             temperature_map[y * map.width + x] = (u8)(tile->temperature * 255.0f);
             vegetation_map[y * map.width + x] = (u8)(tile->vegetation_density * 255.0f);
             water_map[y * map.width + x] = (u8)(tile->distance_from_water);
+            population_map[y * map.width + x] = (u8)(Clampf((f32)tile->population, 0.0f, 255.0f));
         }
     }
     ASSERT(stbi_write_png("output/plates.png", map.width, map.height, 1, plates_map, 1 * map.width));
@@ -535,15 +602,14 @@ void OutputMap(tile_map map, const char* filename_prefix)
     ASSERT(stbi_write_png("output/temperature.png", map.width, map.height, 1, temperature_map, 1 * map.width));
     ASSERT(stbi_write_png("output/vegetation.png", map.width, map.height, 1, vegetation_map, 1 * map.width));
     ASSERT(stbi_write_png("output/water.png", map.width, map.height, 1, water_map, 1 * map.width));
+    ASSERT(stbi_write_png("output/population.png", map.width, map.height, 1, population_map, 1 * map.width));
 
-    s32 biome_stat_table[BIOME_TYPE_COUNT] = {};
     color_rgb* output_image = (color_rgb*)malloc(sizeof(color_rgb) * map.width * map.height);
     for(s32 x = 0; x < map.width; x++)
     {
         for(s32 y = 0; y < map.height; y++)
         {
             biome_type_id biome = map.GetTile(x, y)->biome;
-            biome_stat_table[biome]++;
             color_rgb output_color = biome_color_table[biome];
             tile_has_river_type river_type = map.GetTile(x, y)->river_type;
             if(river_type == TILE_HAS_MAJOR_RIVER) { output_color = COLOR_DARK_BLUE; }
@@ -558,24 +624,18 @@ void OutputMap(tile_map map, const char* filename_prefix)
     printf("\n========= MAP =========\n");
     for(s32 i = 0; i < BIOME_TYPE_COUNT; i++)
     {
-        printf("%s: %d (%.1f%%).  ", biome_name_table[i], biome_stat_table[i], (f32)biome_stat_table[i] * 100.0f / (f32)(map.width * map.height));
+        printf("%s: %d (%.1f%%).  ", biome_name_table[i], map.biome_stat_table[i], (f32)map.biome_stat_table[i] * 100.0f / (f32)(map.width * map.height));
         PrintLineEveryN(i, 3);
-    }
-    s32 total_ocean_count = biome_stat_table[BIOME_TYPE_DEEP_OCEAN] + biome_stat_table[BIOME_TYPE_OCEAN] + biome_stat_table[BIOME_TYPE_SHALLOW_OCEAN];
-    f32 total_ocean_percentage = (f32)total_ocean_count * 100.0f / (f32)(map.width * map.height);
-    if(total_ocean_percentage > 80.0f || total_ocean_percentage < 55.0f)
-    {
-        printf("\n\nOceans too big or too small (%.1f%%), try regerating the map.\n", total_ocean_percentage);
     }
 }
 
-void SimulateMap(tile_map map)
+void SimulateMap(tile_map *map)
 {
-    for(s32 x = 0; x < map.width; x++)
+    for(s32 x = 0; x < map->width; x++)
     {
-        for(s32 y = 0; y < map.height; y++)
+        for(s32 y = 0; y < map->height; y++)
         {
-            tile_data *tile = map.GetTile(x, y);
+            tile_data *tile = map->GetTile(x, y);
             tile->vegetation_density += (tile->vegetation_capacity - tile->vegetation_density) * tile->vegetation_regeneration_rate; // TODO: vary based on season
             tile->vegetation_density = Clampf(tile->vegetation_density, 0.0f, tile->vegetation_capacity);
         }
@@ -591,12 +651,13 @@ int main(void)
     s32 map_width = 1024; s32 map_height = 512;
     tile_map map = CreateMap(map_width, map_height, seed);
     OutputMap(map, "start");
+    printf("\nTotal population: %u.\n", map.total_population);
     u32 total_months = 10 * 12;
     u32 ticks_per_month = 1;
     u32 tick_count = total_months * ticks_per_month;
     for(u32 i = 0; i < tick_count; i++)
     {
-        SimulateMap(map);
+        SimulateMap(&map);
     }
     OutputMap(map, "end");
 
