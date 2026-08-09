@@ -3,7 +3,7 @@
 IF NOT EXIST .\bin mkdir .\bin
 
 set build_output=-Fe:"bin\mapgen.exe" -Fo:"bin\mapgen.obj" -Fd:"bin\vc140.pdb"
-set build_settings=-nologo -GR- -EHa- -D_CRT_SECURE_NO_WARNINGS -DWIN32_LEAN_AND_MEAN -Wall -WX -wd4710
+set build_settings=/F536870912 -nologo -GR- -EHa- -D_CRT_SECURE_NO_WARNINGS -DWIN32_LEAN_AND_MEAN -Wall -WX -wd4710
 
 IF "%1"=="release" (
     set build_settings=%build_settings% -O2i

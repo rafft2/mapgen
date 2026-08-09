@@ -195,8 +195,9 @@ enum tile_has_river_type : u8
 
 struct nation_data
 {
-    u8 tech_level;
+    f64 tech_level;
     u32 total_population;
+    u32 owned_tile_count;
 };
 
 struct tile_data
@@ -236,8 +237,8 @@ struct tile_map
     s32 plate_count;
 
     nation_data *nations;
-    s32 nation_count;
-    s32 nation_capacity;
+    u32 nation_count;
+    u32 nation_capacity;
 
     u32 total_population;
 
@@ -415,38 +416,20 @@ void GenerateRiverFlows(tile_map map)
 
 inline b32 IsOcean(biome_type_id biome)
 {
-    if(biome == BIOME_TYPE_DEEP_OCEAN || biome == BIOME_TYPE_OCEAN || biome == BIOME_TYPE_SHALLOW_OCEAN)
-    {
-        return(1);
-    }
-    else
-    {
-        return(0);
-    }
+    if(biome == BIOME_TYPE_DEEP_OCEAN || biome == BIOME_TYPE_OCEAN || biome == BIOME_TYPE_SHALLOW_OCEAN) { return(1); }
+    else { return(0); }
 }
 
 inline b32 HasRiver(tile_data *tile)
 {
-    if(tile->river_type != TILE_HAS_NO_RIVER)
-    {
-        return(1);
-    }
-    else
-    {
-        return(0);
-    }
+    if(tile->river_type != TILE_HAS_NO_RIVER) { return(1); }
+    else { return(0); }
 }
 
 inline b32 HasWaterSource(tile_data *tile)
 {
-    if(IsOcean(tile->biome) || tile->river_type != TILE_HAS_NO_RIVER)
-    {
-        return(1);
-    }
-    else
-    {
-        return(0);
-    }
+    if(IsOcean(tile->biome) || tile->river_type != TILE_HAS_NO_RIVER) { return(1); }
+    else { return(0); }
 }
 
 void AssignBiomes(tile_map *map, s32 seed)
@@ -526,7 +509,30 @@ void AssignBiomes(tile_map *map, s32 seed)
     map->ocean_percentage = total_ocean_percentage;
 }
 
-void SpawnSettelements(tile_map *map)
+void GrowNationRecursive(vec2i position, u32 nation_idx, tile_map *map)
+{
+    tile_data *tile = map->GetTile(position);
+    if(tile->population == 0 || tile->owner_nation_index != 0) { return; }
+    else
+    {
+        map->nations[nation_idx].total_population += tile->population;
+        map->nations[nation_idx].owned_tile_count++;
+        tile->owner_nation_index = nation_idx;
+        for(s32 dx = -1; dx <= 1; dx++)
+        {
+            for(s32 dy = -1; dy <= 1; dy++)
+            {
+                vec2i new_position = { position.x + dx, position.y + dy };
+                if(IN_BOUNDS2D(new_position.x, new_position.y, map->width, map->height))
+                {
+                    GrowNationRecursive(new_position, nation_idx, map);
+                }
+            }
+        }
+    }
+}
+
+void SpawnSettlements(tile_map *map)
 {
     for(s32 x = 0; x < map->width; x++)
     {
@@ -544,6 +550,39 @@ void SpawnSettelements(tile_map *map)
             
             tile->population = (u32)(multiplier * 120.0f);
             map->total_population += tile->population;
+            tile->owner_nation_index = 0;
+        }
+    }
+    for(s32 x = 1; x < map->width - 1; x++)
+    {
+        for(s32 y = 1; y < map->height - 1; y++)
+        {
+            tile_data *tile = map->GetTile(x, y);
+            if(tile->population > 0 && tile->owner_nation_index == 0)
+            {
+                if(map->nation_count >= map->nation_capacity)
+                {
+                    map->nation_capacity *= 2;
+                    map->nations = (nation_data*)realloc(map->nations, map->nation_capacity);
+                }
+                u32 nation_idx = map->nation_count;
+                map->nation_count++;
+                tile->owner_nation_index = nation_idx;
+                map->nations[nation_idx].total_population += tile->population;
+                map->nations[nation_idx].tech_level = 0.0;
+                map->nations[nation_idx].owned_tile_count = 1;
+                for(s32 dx = -1; dx <= 1; dx++)
+                {
+                    for(s32 dy = -1; dy <= 1; dy++)
+                    {
+                        vec2i position = { x + dx, y + dy };
+                        if(IN_BOUNDS2D(position.x, position.y, map->width, map->height))
+                        {
+                            GrowNationRecursive(position, nation_idx, map);
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -558,15 +597,18 @@ tile_map CreateMap(s32 width, s32 height, s32 seed)
     map.plate_count = 150;
     map.plates = (plate_data*)malloc(sizeof(plate_data) * map.plate_count);
     map.nation_capacity = 256;
-    map.nation_count = 0;
+    map.nation_count = 1; // NOTE: reserve nation 0 for no-nation
     map.nations = (nation_data*)malloc(sizeof(nation_data) * map.nation_capacity);
+    map.nations[0].total_population = INT_MAX;
+    map.nations[0].owned_tile_count = 0;
+    map.nations[0].tech_level = 9999.999;
     map.total_population = 0u;
 
     GeneratePlatesAndAssignBaseElevationToTiles(map);
     GenerateNoiseMap(map, seed);
     GenerateRiverFlows(map);
     AssignBiomes(&map, seed);
-    SpawnSettelements(&map);
+    SpawnSettlements(&map);
     
     return(map);
 }
@@ -581,6 +623,7 @@ void OutputMap(tile_map map, const char* filename_prefix)
     u8* vegetation_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     u8* water_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     u8* population_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
+    u8* nation_map = (u8*)malloc(sizeof(u8) * map.width * map.height);
     for(s32 x = 0; x < map.width; x++)
     {
         for(s32 y = 0; y < map.height; y++)
@@ -594,6 +637,7 @@ void OutputMap(tile_map map, const char* filename_prefix)
             vegetation_map[y * map.width + x] = (u8)(tile->vegetation_density * 255.0f);
             water_map[y * map.width + x] = (u8)(tile->distance_from_water);
             population_map[y * map.width + x] = (u8)(Clampf((f32)tile->population, 0.0f, 255.0f));
+            nation_map[y * map.width + x] = (u8)(((f32)tile->owner_nation_index / (f32)map.nation_count) * 255.0f);
         }
     }
     ASSERT(stbi_write_png("output/plates.png", map.width, map.height, 1, plates_map, 1 * map.width));
@@ -603,6 +647,7 @@ void OutputMap(tile_map map, const char* filename_prefix)
     ASSERT(stbi_write_png("output/vegetation.png", map.width, map.height, 1, vegetation_map, 1 * map.width));
     ASSERT(stbi_write_png("output/water.png", map.width, map.height, 1, water_map, 1 * map.width));
     ASSERT(stbi_write_png("output/population.png", map.width, map.height, 1, population_map, 1 * map.width));
+    ASSERT(stbi_write_png("output/nations.png", map.width, map.height, 1, nation_map, 1 * map.width));
 
     color_rgb* output_image = (color_rgb*)malloc(sizeof(color_rgb) * map.width * map.height);
     for(s32 x = 0; x < map.width; x++)
@@ -626,6 +671,14 @@ void OutputMap(tile_map map, const char* filename_prefix)
     {
         printf("%s: %d (%.1f%%).  ", biome_name_table[i], map.biome_stat_table[i], (f32)map.biome_stat_table[i] * 100.0f / (f32)(map.width * map.height));
         PrintLineEveryN(i, 3);
+    }
+    printf("\n\nTotal nations: %d\n", map.nation_count);
+    // TODO: Make nation names random and dynamic (i.e. adjust title based on location, population, owned tiles, etc..)
+    const char* nation_names[] = { "No nation", "Kingdom of Elysia", "Jubilian Empire", "The Great Kingdom", "Empire of Gold", "Northern Settlements"};
+    // TODO: sort by power (population, tiles, tech level, army, etc..) and display top N
+    for(u32 i = 1; i <= 6; i++)
+    {
+        printf("Nation: %s, Total population: %d, Total owned tiles: %d\n", nation_names[i], map.nations[i].total_population, map.nations[i].owned_tile_count);
     }
 }
 
