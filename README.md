@@ -9,3 +9,6 @@
 
 ## Plates and Rivers
 ![](images/map4.png)
+
+## Spawning and moving settlements
+![](images/map5.png) ![](images/population5.png)

@@ -195,7 +195,8 @@ enum tile_has_river_type : u8
 
 struct nation_data
 {
-    f64 tech_level;
+    u8 tech_level;
+    f32 tech_progress;
     u32 total_population;
     u32 owned_tile_count;
 };
@@ -222,7 +223,7 @@ struct tile_data
 
     f32 food_stock;
     u32 owner_nation_index;
-    u32 population;
+    s32 population;
 };
 
 struct tile_map
@@ -548,7 +549,7 @@ void SpawnSettlements(tile_map *map)
             if(tile->biome == BIOME_TYPE_PLAIN || tile->biome == BIOME_TYPE_FOREST || tile->biome == BIOME_TYPE_RAINFOREST) { multiplier += 1.0f; }
             multiplier += tile->vegetation_density / 2.0f;
             
-            tile->population = (u32)(multiplier * 120.0f);
+            tile->population = (s32)(multiplier * 120.0f);
             map->total_population += tile->population;
             tile->owner_nation_index = 0;
         }
@@ -569,7 +570,8 @@ void SpawnSettlements(tile_map *map)
                 map->nation_count++;
                 tile->owner_nation_index = nation_idx;
                 map->nations[nation_idx].total_population += tile->population;
-                map->nations[nation_idx].tech_level = 0.0;
+                map->nations[nation_idx].tech_level = 1u;
+                map->nations[nation_idx].tech_progress = 0.0f;
                 map->nations[nation_idx].owned_tile_count = 1;
                 for(s32 dx = -1; dx <= 1; dx++)
                 {
@@ -601,8 +603,9 @@ tile_map CreateMap(s32 width, s32 height, s32 seed)
     map.nations = (nation_data*)malloc(sizeof(nation_data) * map.nation_capacity);
     map.nations[0].total_population = INT_MAX;
     map.nations[0].owned_tile_count = 0;
-    map.nations[0].tech_level = 9999.999;
-    map.total_population = 0u;
+    map.nations[0].tech_level = 0;
+    map.nations[0].tech_progress = 0.0f;
+    map.total_population = 0;
 
     GeneratePlatesAndAssignBaseElevationToTiles(map);
     GenerateNoiseMap(map, seed);
@@ -637,7 +640,7 @@ void OutputMap(tile_map map, const char* filename_prefix)
             vegetation_map[y * map.width + x] = (u8)(tile->vegetation_density * 255.0f);
             water_map[y * map.width + x] = (u8)(tile->distance_from_water);
             population_map[y * map.width + x] = (u8)(Clampf((f32)tile->population, 0.0f, 255.0f));
-            nation_map[y * map.width + x] = (u8)(((f32)tile->owner_nation_index / (f32)map.nation_count) * 255.0f);
+            nation_map[y * map.width + x] = map.nations[tile->owner_nation_index].tech_level;
         }
     }
     ASSERT(stbi_write_png("output/plates.png", map.width, map.height, 1, plates_map, 1 * map.width));
@@ -676,9 +679,9 @@ void OutputMap(tile_map map, const char* filename_prefix)
     // TODO: Make nation names random and dynamic (i.e. adjust title based on location, population, owned tiles, etc..)
     const char* nation_names[] = { "No nation", "Kingdom of Elysia", "Jubilian Empire", "The Great Kingdom", "Empire of Gold", "Northern Settlements"};
     // TODO: sort by power (population, tiles, tech level, army, etc..) and display top N
-    for(u32 i = 1; i <= 6; i++)
+    for(u32 i = 1; i < 6; i++)
     {
-        printf("Nation: %s, Total population: %d, Total owned tiles: %d\n", nation_names[i], map.nations[i].total_population, map.nations[i].owned_tile_count);
+        printf("%s: Population: %d - Tech: %u - Tiles: %d\n", nation_names[i], map.nations[i].total_population, map.nations[i].tech_level, map.nations[i].owned_tile_count);
     }
 }
 
@@ -689,8 +692,79 @@ void SimulateMap(tile_map *map)
         for(s32 y = 0; y < map->height; y++)
         {
             tile_data *tile = map->GetTile(x, y);
+
+            u8 tech_level = map->nations[tile->owner_nation_index].tech_level;
+            f32 birth_rate = 0.05f + ((f32)tech_level / (255.0f * 5.0f));
+            f32 death_rate = 0.01f - ((f32)tech_level / (255.0f * 20.0f));
+            f32 consumption_per_person = 0.001f;
+            f32 total_consumption = (f32)tile->population * consumption_per_person;
+
+            f32 harvest_efficiency = (f32)tech_level / 255.0f;
+            harvest_efficiency /= 2.0f;
+            harvest_efficiency += 0.25f; // [0.25f, 0.75f]
+            f32 food_harvested = tile->vegetation_density * harvest_efficiency;
+            tile->vegetation_density -= food_harvested;
+            tile->food_stock += food_harvested;
+
+            f32 food_surplus = tile->food_stock - total_consumption;
+            tile->food_stock -= total_consumption;
+            if(tile->food_stock < 0.0f) { tile->food_stock = 0.0f; }
+            if(food_surplus > 0.0f)
+            {
+                birth_rate += food_surplus * 0.1f;
+            }
+            u32 newborns = (u32)((f32)tile->population * birth_rate);
+
+            u32 deaths = (u32)((f32)tile->population * death_rate);
+            if(food_surplus < 0.0f)
+            {
+                f32 starving_people = -food_surplus / consumption_per_person;
+                // NOTE: technically half of them actually die, the other half runs away.
+                //       Deaths subtract off of population later so it's the same.
+                deaths += (u32)(starving_people);
+                f32 best_score = -FLT_MAX;
+                vec2i best_tile = { x, y };
+                for(u8 dir = SOUTH; dir < DIRECTION_COUNT; dir++)
+                {
+                    vec2i movement = adjacent_tile_from_direction[dir];
+                    vec2i target = { x + movement.x, y + movement.y };
+                    if(IN_BOUNDS2D(target.x, target.y, map->width, map->height))
+                    {
+                        tile_data *other_tile = map->GetTile(target);
+                        f32 score = 0.0f;
+                        if(other_tile->population < tile->population) { score += 0.5f; }
+                        if(biome_vegetation_base_table[other_tile->biome] > biome_vegetation_base_table[tile->biome]) { score += 0.3f; }
+                        if(map->nations[other_tile->owner_nation_index].tech_level > map->nations[tile->owner_nation_index].tech_level) { score += 0.5f; }
+                        if(other_tile->distance_from_water < tile->distance_from_water) { score += 0.1f; }
+                        if(other_tile->distance_from_river < tile->distance_from_river) { score += 0.1f; }
+                        // TODO: add other factors for scoring tiles. Also add that if multiple tiles score the same then split the movement equally
+                        if(score >= best_score)
+                        {
+                            best_score = score;
+                            best_tile = target;
+                        }
+                    }
+                }
+                ASSERT(!(best_tile.x == x && best_tile.y == y));
+                map->GetTile(best_tile)->population += (u32)(starving_people / 2.0f);
+            }
+            tile->population += newborns - deaths;
+            if(tile->population < 0) { tile->population = 0; }
+
+            f32 tech_progress = (f32)tile->population * (tile->distance_from_water <= 3 ? 1.1f : 1.0f) * (food_surplus > 0 ? 0.5f : 0.05f);
+            tech_progress /= (f32)map->nations[tile->owner_nation_index].owned_tile_count;
+            map->nations[tile->owner_nation_index].tech_progress += tech_progress;
+
             tile->vegetation_density += (tile->vegetation_capacity - tile->vegetation_density) * tile->vegetation_regeneration_rate; // TODO: vary based on season
             tile->vegetation_density = Clampf(tile->vegetation_density, 0.0f, tile->vegetation_capacity);
+        }
+    }
+    for(u32 i = 1; i < map->nation_count; i++)
+    {
+        if(map->nations[i].tech_progress >= 1.0f)
+        {
+            map->nations[i].tech_progress = 0.0f;
+            map->nations[i].tech_level += 1;
         }
     }
 }
@@ -705,14 +779,23 @@ int main(void)
     tile_map map = CreateMap(map_width, map_height, seed);
     OutputMap(map, "start");
     printf("\nTotal population: %u.\n", map.total_population);
-    u32 total_months = 10 * 12;
-    u32 ticks_per_month = 1;
-    u32 tick_count = total_months * ticks_per_month;
+    u32 tick_count = 200;
     for(u32 i = 0; i < tick_count; i++)
     {
         SimulateMap(&map);
     }
+    map.total_population = 0;
+    for(u32 i = 1; i < map.nation_count; i++) { map.nations[i].total_population = 0; }
+    for(s32 x = 0; x < map.width; x++)
+    {
+        for(s32 y = 0; y < map.height; y++)
+        {
+            map.nations[map.GetTile(x, y)->owner_nation_index].total_population += map.GetTile(x, y)->population;
+        }
+    }
+    for(u32 i = 1; i < map.nation_count; i++) { map.total_population += map.nations[i].total_population; }
     OutputMap(map, "end");
+    printf("\nTotal population: %u.\n", map.total_population);
 
     return(0);
 }
